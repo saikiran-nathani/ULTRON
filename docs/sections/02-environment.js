@@ -37,7 +37,7 @@ module.exports = function (pres, T) {
 
   /* ---- Asus setup ---- */
   {
-    const s = T.slide("Setup", "The Asus — your CUDA classroom", "Ubuntu 26.04 LTS. Windows was removed — see docs/WINDOWS-TO-UBUNTU.md.");
+    const s = T.slide("Setup", "The Asus — your CUDA classroom", "Ubuntu 26.04 LTS. Windows was removed — see TUF/01-SETUP.md.");
     T.codeBlock(s, 0.55, 1.62, 6.5, 4.3, [
       { t: "# 1. NVIDIA driver (the ONLY system-level piece)", c: C.moss },
       "ubuntu-drivers devices",
