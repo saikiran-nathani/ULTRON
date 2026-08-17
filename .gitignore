@@ -1,0 +1,39 @@
+# --- OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# --- python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+venv/
+.venv/
+
+# --- the resolved environment, not the spec (recreate with pip install -r requirements.txt)
+requirements.lock.txt
+
+# --- data is append-only and large; it lives on disk, never in git.
+# The directory shapes are tracked via .gitkeep, the contents never are.
+data/raw/*
+data/interim/*
+data/processed/*
+!data/**/.gitkeep
+
+# --- adapters are tens of MB and regenerable from config + data; merged models never.
+checkpoints/*
+!checkpoints/.gitkeep
+
+# --- scratch only, never canonical
+notebooks/*
+!notebooks/.gitkeep
+
+# --- run artefacts
+wandb/
+*.log
+
+# NOT ignored, deliberately:
+#   configs/   -- configs/ IS the lab notebook. A config that is not committed did not happen.
+#   results/   -- written by hand, one markdown file per phase. Your future self reads only this.

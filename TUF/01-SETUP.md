@@ -449,13 +449,33 @@ trying to keep free.
 
 ## Step 6 — Reattach the 1 TB as `/data`
 
-Shut down, reinstall the 1 TB, boot.
+> ## 🛑 MEASURED 2026-08-17 — THE DEVICE NAMES BELOW ARE REVERSED ON THIS MACHINE
+>
+> The 1 TB is **already installed and mounted**, and the kernel enumerated the two NVMe
+> drives the opposite way round from what this step assumed:
+>
+> | Device | Size | Model | FS | Mounted at | What it actually is |
+> |---|---|---|---|---|---|
+> | `nvme0n1p2` | 931.5 G | CT1000P3SSD8 | **ntfs3** | `/run/media/killerx8143/Storage` | the **1 TB data drive**, 577 G used (62%) |
+> | `nvme1n1p2` | 475.9 G | SAMSUNG MZVLQ512HBLU | ext4 | **`/`** | the **512 GB Ubuntu root** |
+>
+> **Running this step's `wipefs -a /dev/nvme1n1` verbatim would erase Ubuntu.**
+> It is written for `nvme1n1` = the 1 TB. Here `nvme1n1` is the OS.
+>
+> Device names are not stable and are not a description. `lsblk -o NAME,SIZE,MODEL`
+> and match on **SIZE and MODEL**, every time, before any destructive command.
+>
+> **Also note:** the 1 TB holds 577 GB of existing data, so it cannot be reformatted
+> without moving that off first. The decision below therefore resolves to
+> *"keep NTFS, and point `HF_HOME` at the ext4 root"* — see the amendment at the end of
+> this step.
 
 ```bash
 lsblk -o NAME,SIZE,MODEL,FSTYPE,MOUNTPOINT
 ```
 
-Expect `nvme0n1` ~512 G (Ubuntu) **and** `nvme1n1` ~1 T (your data, NTFS).
+~~Expect `nvme0n1` ~512 G (Ubuntu) **and** `nvme1n1` ~1 T (your data, NTFS).~~
+**Superseded — see the measured table above. Verify by MODEL and SIZE, never by device name.**
 
 ### Read it read-only first
 
@@ -498,8 +518,15 @@ sudo umount /mnt/old
 
 > ⚠️ The next commands erase the 1 TB. Confirm `nvme1n1` is the **1 TB**, not your new
 > Ubuntu drive. Run `lsblk` again if there is any doubt at all.
+>
+> 🛑 **ON THIS MACHINE `nvme1n1` IS THE UBUNTU ROOT.** The 1 TB is `nvme0n1`. The
+> command below is written with the assignment reversed and would destroy the OS.
+> It is left unedited only so the mistake is visible; **do not run it as written.**
+> The 1 TB also currently holds 577 GB of data. Nothing here should be run at all
+> until that data is copied off and verified.
 
 ```bash
+# 🛑 DO NOT RUN AS WRITTEN ON THIS MACHINE — nvme1n1 is the Ubuntu root drive here.
 sudo wipefs -a /dev/nvme1n1 && sudo parted /dev/nvme1n1 mklabel gpt && sudo parted -a opt /dev/nvme1n1 mkpart primary ext4 0% 100% && sudo mkfs.ext4 -L data /dev/nvme1n1p1
 ```
 
@@ -542,12 +569,43 @@ when you are streaming datasets.
 
 | Drive | Holds | Notes |
 |---|---|---|
-| **512 GB** — `/` | Ubuntu, conda envs, PyTorch, repos, swap | ~60 GB used |
+| **512 GB** — `/` | Ubuntu, venvs, PyTorch, repos, swap | ~60 GB used |
 | **1 TB** — `/data` | `HF_HOME`, datasets, rollouts, checkpoints | this is the part that grows |
 
 ```bash
 mkdir -p /data/hf /data/datasets
 ```
+
+### 🔧 AMENDMENT — measured 2026-08-17: `/data` goes on the ext4 root
+
+The split above assumes the 1 TB is ext4 and mounted at `/data`. Neither is true here:
+the 1 TB is **NTFS** with **577 GB already used**, auto-mounted by the desktop at
+`/run/media/killerx8143/Storage`. `/data` does not exist.
+
+This step's own decision table says *"gets swapped to the Mac sometimes → keep NTFS, and
+point `HF_HOME` at the 512 GB instead."* That is the branch we are on, and NTFS settles
+it regardless: the HuggingFace cache is built on **symlinks** (`blobs/` + `snapshots/`),
+and on NTFS `huggingface_hub` falls back to copying — roughly doubling disk use per model.
+
+**`HF_HOME` must land on ext4.** The root drive has **391 GB free**, which is ample,
+because the 150–400 GB cache figure in the disk-strategy table is *Mac* work. This box
+needs Qwen2.5-Coder-0.5B (~1 GB), 1.5B (~3 GB), a few GB of training shards, and adapters
+measured in tens of MB — comfortably under 50 GB.
+
+Create `/data` as a plain directory on the ext4 root, so every `/data/...` path in this
+pack stays valid with no fstab entry and no reformat:
+
+```bash
+sudo mkdir -p /data && sudo chown -R $USER:$USER /data && mkdir -p /data/hf /data/datasets
+```
+
+That `chown` is not optional — without it every write fails with permission denied.
+
+> **Separately:** this repo currently lives on the NTFS volume
+> (`/run/media/killerx8143/Storage/projects/ULTRON`). Git works there but degrades — NTFS
+> presents a uniform fake permission mask, so mode bits do not round-trip. Prefer moving
+> the working copy to the ext4 root and re-cloning rather than copying. Sandbox temp dirs
+> are unaffected: they default to `/tmp`, which is on ext4.
 
 ---
 
@@ -593,30 +651,65 @@ Do not proceed until `echo $HF_HOME` prints `/data/hf`.
 
 ---
 
-## Step 9 — Conda and the ML stack
+## Step 9 — The ML stack (pip + venv, no conda)
+
+> 🔧 **AMENDED 2026-08-17 — pip/venv instead of conda, Python 3.14 instead of 3.11.**
+> Conda is not used on this box. Everything below is `venv` + `pip`.
+
+### The interpreter: 3.14 is the only option, and it works
+
+Ubuntu 26.04's archive contains **only `python3.14`** — there is no `python3.11`,
+`python3.12`, or `python3.13` package at all, so the original `python=3.11` is not
+reachable without a PPA or a standalone build. It is also unnecessary. Verified against
+the live indexes on 2026-08-17:
+
+| Package | 3.14 support |
+|---|---|
+| `torch` 2.13.0 | cp314 wheels on PyPI **and** on the cu128 / cu129 / cu130 indexes |
+| `bitsandbytes` 0.50.1 | `py3-none-manylinux_2_24_x86_64` — ABI-agnostic, loads `.so` via ctypes |
+| `unsloth` 2026.8.18 | declares `requires_python = <3.15,>=3.9` |
+| `transformers` 5.15 · `trl` 1.10 · `peft` 0.20 · `accelerate` 1.14 | pure-python wheels, `>=3.10` |
 
 ```bash
-wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh && bash Miniconda3-latest-Linux-x86_64.sh
+sudo apt install -y python3.14-venv python3-pip
 ```
-
-Restart the shell, then:
 
 ```bash
-conda create -n ultron python=3.11 -y && conda activate ultron
+python3.14 -m venv ~/venvs/ultron && source ~/venvs/ultron/bin/activate
 ```
+
+Put the venv on the **ext4 root**, not the NTFS volume. Add the `source` line to
+`~/.bashrc` if you want it active by default.
 
 ### Match the wheel to the driver
 
-`nvidia-smi` on this machine reports **CUDA 13.2** — that is the *driver's* capability, not a
-toolkit you installed. CUDA drivers are backward compatible, so any `cu12x` or `cu13x` wheel
-will run. Take the newest build PyTorch publishes rather than an old one:
+`nvidia-smi` on this machine reports driver **595.84** (CUDA 13.2 capable) — that is the
+*driver's* capability, not a toolkit you installed. CUDA drivers are backward compatible,
+so any `cu12x` or `cu13x` wheel will run.
 
 ```bash
-pip install torch --index-url https://download.pytorch.org/whl/cu128
+pip install torch
 ```
 
-If that index 404s, check the current options at `pytorch.org/get-started/locally/` — the
-published builds move between releases.
+~~`pip install torch --index-url https://download.pytorch.org/whl/cu128`~~
+
+**Amended: use plain PyPI, not the cu128 index.** PyPI's `torch` 2.13.0 pins
+`nvidia-cudnn-cu13` — it *is* the CUDA 13 build, and it matches this driver. The cu128
+index only publishes **2.10.0** for cp314, so the original command installs an older
+torch here for no benefit. Ampere `sm_86` is fully supported under CUDA 13.
+
+Install everything else from the committed spec:
+
+```bash
+pip install -r requirements.txt
+```
+
+Then lock exactly what resolved — the reproducibility checklist wants library versions
+recorded next to every result:
+
+```bash
+pip freeze > requirements.lock.txt
+```
 
 **Verify what you actually got before installing anything else:**
 

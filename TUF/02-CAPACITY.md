@@ -166,7 +166,7 @@ Single-threaded wall-clock. Divide by your worker count (8 physical cores here).
 
 | Drive | Holds | Notes |
 |---|---|---|
-| **512 GB — `/`** | Ubuntu, conda envs, PyTorch, repos, swap | ~60 GB used. **Nothing else.** |
+| **512 GB — `/`** | Ubuntu, venvs, PyTorch, repos, swap, **and `HF_HOME`** | 53 GB used, 391 GB free (measured 2026-08-17). See [01-SETUP.md](01-SETUP.md) Step 6 amendment: the 1 TB is NTFS, so the HF cache lives here. |
 | **1 TB — `/data`** | `HF_HOME`, datasets, rollouts, checkpoints | This is the part that grows |
 
 | What | Rough size | Where | Policy |
@@ -181,7 +181,7 @@ Single-threaded wall-clock. Divide by your worker count (8 physical cores here).
 | Merged full models | 1–15 GB each | Mac | **Do NOT keep.** Regenerate from adapter + base. |
 | Eval outputs / logs | 1–10 GB | Mac | Keep. This is your results record. |
 
-- **The 512 GB rule:** the root SSD holds the OS and conda envs — nothing else. Every large path
+- **The 512 GB rule:** the root SSD holds the OS and venvs — nothing else. Every large path
   points at `/data`.
 - **The rule:** anything regenerable in under an hour gets deleted. Anything that took a day to
   produce gets kept forever.
