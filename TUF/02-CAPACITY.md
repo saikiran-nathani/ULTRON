@@ -32,19 +32,60 @@ Assume these numbers. **Do not re-derive them.**
 
 QLoRA + Unsloth, bf16, gradient checkpointing on.
 
+> **0.5B is the dev loop; 1.5B is the ship target.** Build the pipeline and run every ablation at
+> 0.5B where a run is 20–40 min. Re-run the settled recipe at 1.5B **once** (2–3 hours) and quantize
+> to Q4_K_M. GRPO in particular is only comfortable at 0.5B on this card.
+
 | Model | seq_len | batch | grad_accum | Status |
 |---|---|---|---|---|
-| **Qwen2.5-Coder-0.5B** | 1024 | 2 | 8 | Comfortable — the default workhorse |
+| **Qwen2.5-Coder-0.5B** | 1024 | 2 | 8 | Comfortable — **the dev loop.** 20–40 min/run |
 | **Qwen2.5-Coder-0.5B** | 2048 | 1 | 16 | Fine |
-| **Qwen2.5-Coder-1.5B** | 512 | 1 | 16 | Tight but works. **Unsloth required.** |
+| **Qwen2.5-Coder-1.5B** | 512 | 1 | 16 | Tight but works. **Unsloth required.** ← ship target |
 | **Qwen2.5-Coder-1.5B** | 1024 | 1 | 16 | Marginal — expect to tune |
 | **Qwen2.5-Coder-3B** | 256 | 1 | 32 | Marginal at best. Usually not worth it. |
 | **Anything ≥ 7B** | — | — | — | **Does not train here. Do not propose it.** |
 
 ## What infers here
 
+### Measured — 1.5B GGUF, llama.cpp, `-ngl 99` (2026-08-18)
+
+| Model / format | VRAM loaded | VRAM @ 32K ctx | Decode (short) | Verdict |
+|---|---|---|---|---|
+| **1.5B Q4_K_M** (986 MB) | **1,394 MiB** | **2,124 MiB** | **116.4 tok/s** | Comfortable — ~1.8 GB spare even at 32K context |
+| **1.5B Q8_0** (1.6 GB) | 2,024 MiB | 2,654 MiB | 91.2 tok/s | Fits, but Q4_K_M is faster *and* smaller. No reason to ship it. |
+
+Full benchmark including prefill, long-context, and CPU-only figures is in [STATUS.md](STATUS.md).
+
+### Still estimated — not yet measured
+
+- **0.5B Q4_K_M ≈ 300–400 MB** — trivially fits. Even F16 (~1.0 GB) fits with room.
 - **3B in 4-bit ≈ 1.8 GB** — fits with room for context.
 - **7B in 4-bit ≈ 4 GB** — **does not fit** once you add KV cache. Use the Mac.
+
+### Decode and prefill have different bottlenecks
+
+This is the most useful thing the benchmark showed, and it is not obvious:
+
+| | Bound by | Does quantization help? | Measured |
+|---|---|---|---|
+| **Decode** | Memory bandwidth | **Yes** — roughly in proportion to bytes read | Q4_K_M is **20–28% faster** than Q8_0 |
+| **Prefill** | Compute | **No** — dequantization becomes pure overhead | Q8_0 is **3.9% faster** at 5k, tied at 20k |
+
+Effective bandwidth achieved: **Q8_0 ~146 GB/s (76% of the 3050's ~192 GB/s peak)**, Q4_K_M
+**~115 GB/s (60%)**. Q4_K_M gives up ~16% of peak to K-quant unpacking — which is why its speedup is
+1.28×, not the 1.62× the file-size ratio would predict.
+
+**Practical consequence:** long-prompt / short-completion workloads gain almost nothing in *speed*
+from quantization, only footprint. GRPO rollouts (short prompt, 384-token completion) sit in the
+decode-bound regime, so Q4 wins there.
+
+> ⚠️ **llama.cpp decode speed does not transfer to the TRL training loop.** GRPO rollouts go through
+> HF `generate`, which is substantially slower than llama.cpp unbatched. Do not use 116 tok/s to
+> estimate GRPO wall-clock — measure that separately.
+
+> **"Does not fit" means "gets slow", not "crashes".** llama.cpp offloads per-layer: `-ngl 20` puts
+> 20 layers on the GPU and the rest on the Ryzen. Measured CPU-only decode is 24.8 tok/s (Q4_K_M) vs
+> 116.4 on GPU — a 4.7× gap. Fine for a one-off check, useless for a bulk generation loop.
 
 ## The VRAM budget at 0.5B QLoRA
 
