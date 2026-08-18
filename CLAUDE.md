@@ -105,8 +105,11 @@ sandbox → eval harness → baseline → data curation → SFT → RFT → DPO 
 ```
 
 - Domain: **code** — chosen because tests give a free, objective verifier.
-- Target model: **Qwen2.5-Coder-0.5B**. 1.5B is the stretch.
-- Endpoint: a 0.5B model running on-device via GGUF.
+- **Dev loop: Qwen2.5-Coder-0.5B.** Pipeline development and every ablation. 20–40 min per SFT run.
+- **Ship target: Qwen2.5-Coder-1.5B**, served as Q4_K_M GGUF (986 MB · 1,394 MiB VRAM · 116 tok/s, measured 2026-08-18).
+- Build at 0.5B for loop speed; re-run the settled recipe at 1.5B **once**. Do not iterate at 1.5B —
+  SFT there is 2–3 hours, and GRPO on 4 GB is only comfortable at 0.5B.
+- Endpoint: a 1.5B model running on-device via GGUF.
 - Full 190-slide field guide + manifest lives in `docs/` (`node build.js` regenerates).
 
 ### DSA-Python — separate repo

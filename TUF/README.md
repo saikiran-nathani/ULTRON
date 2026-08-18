@@ -12,7 +12,8 @@ guide in `docs/` and filtered to what this machine actually does.
 - **This box is the CUDA machine.** RTX 3050, **4 GB VRAM**, 16 GB system RAM, Ryzen 7 4800H, Ubuntu 26.04.
 - **All GPU training happens here.** Data curation, teacher generation, eval, and merging happen on the Mac.
 - **ULTRON is a learning curriculum, not a product.** Understanding beats benchmark numbers.
-- **Target model: Qwen2.5-Coder-0.5B.** 1.5B is the stretch. **7B+ does not train here.**
+- **Dev loop: Qwen2.5-Coder-0.5B** (20–40 min/SFT run). **Ship target: 1.5B served as Q4_K_M GGUF.**
+  Build at 0.5B, re-run the settled recipe at 1.5B once. **7B+ does not train here.**
 - **The two ceilings:** 16 GB system RAM bites first (dataset loading); 4 GB VRAM caps model size.
 - **Non-negotiable:** bf16 never fp16 · QLoRA never full FT · gradient checkpointing on ·
   `paged_adamw_8bit` · `HF_HOME=/data/hf` before any download.
