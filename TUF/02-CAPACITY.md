@@ -11,9 +11,9 @@ Assume these numbers. **Do not re-derive them.**
 | **Box** | Asus TUF A17 |
 | **GPU** | NVIDIA RTX 3050 Laptop — **4 GB VRAM**, Ampere (GA107, `sm_86`) |
 | **CPU** | AMD Ryzen 7 4800H — 8 cores / 16 threads (Zen 2, x86-64) |
-| **RAM** | **16 GB** system |
+| **RAM** | **16 GB** system — **14 Gi usable**, the iGPU reserves ~2 GB (measured 2026-08-17) |
 | **OS** | Ubuntu 26.04 LTS, ext4, no encryption |
-| **Disks** | 512 GB root (`/`) + 1 TB (`/data`) |
+| **Disks** | 512 GB ext4 root (`/`) — holds everything incl. `/data`. 1 TB is **NTFS**, 577 GB of unrelated data, not used by ULTRON (measured 2026-08-17) |
 | **Network** | Realtek RTL8111/8168 Ethernet (`r8169`). Wi-Fi does not enumerate — see [01-SETUP.md](01-SETUP.md) Step 3 |
 | **Role** | **The CUDA machine.** All GPU training happens here. |
 
@@ -112,7 +112,8 @@ On a 4 GB card, half a gigabyte is 12% of your entire budget.
 |---|---|---|---|
 | Windows 11 + browser open | 500–1000 MB | ~3.0–3.5 GB | DWM compositor + browser GPU process |
 | Ubuntu, desktop on dGPU | 150–300 MB | ~3.7 GB | Avoid — no reason to drive the display from the 3050 |
-| **Ubuntu, hybrid (display on iGPU)** | **5–20 MB** | **~3.95 GB** | **The default. This is what you want.** |
+| **Ubuntu, hybrid (display on iGPU)** | **5–20 MB** | **~3.95 GB** | The target. |
+| **This box, as measured 2026-08-17** | ⚠️ **79 MiB** | ~3.87 GB | `display_active: Enabled` — something is on the dGPU. See STATUS open question 4. |
 | Ubuntu, TTY only (Ctrl+Alt+F3) | ~5 MB | ~3.95 GB | Marginal further gain; useful for the longest runs |
 
 ```bash
@@ -207,12 +208,12 @@ Single-threaded wall-clock. Divide by your worker count (8 physical cores here).
 
 | Drive | Holds | Notes |
 |---|---|---|
-| **512 GB — `/`** | Ubuntu, conda envs, PyTorch, repos, swap | ~60 GB used. **Nothing else.** |
-| **1 TB — `/data`** | `HF_HOME`, datasets, rollouts, checkpoints | This is the part that grows |
+| **512 GB — `/` (ext4)** | Ubuntu, venvs, PyTorch, repos, swap, **and `/data`** — which is a plain directory here, not a mount | 53 GB used, **391 GB free** (measured 2026-08-17). Everything ULTRON touches lives here. |
+| **1 TB — NTFS** | 577 GB of pre-existing unrelated data, auto-mounted at `/run/media/killerx8143/Storage` | **Not used by ULTRON.** NTFS breaks the HF cache's symlinks and degrades git. See [01-SETUP.md](01-SETUP.md) Step 6 amendment. |
 
 | What | Rough size | Where | Policy |
 |---|---|---|---|
-| HF model cache | 150–400 GB | Mac 3TB · TUF `/data/hf` | **Set `HF_HOME` day one.** Never on the 512 GB root. |
+| HF model cache | 150–400 GB on the Mac · **under 50 GB on the TUF** | Mac 3TB · TUF `/data/hf` (on the ext4 root) | **Set `HF_HOME` day one.** The big figure is Mac work; this box needs 0.5B (~1 GB), 1.5B (~3 GB), shards and adapters. |
 | The Stack v2 subset | 50–200 GB | Mac, `data/raw/` | Download a language subset, not the whole thing |
 | Instruction datasets | 5–20 GB | Mac, `data/raw/` | Small. Keep all versions. |
 | `data/interim` + `processed` | 20–80 GB | Mac (authoritative) | Every version kept. This is your provenance chain. |
@@ -222,8 +223,9 @@ Single-threaded wall-clock. Divide by your worker count (8 physical cores here).
 | Merged full models | 1–15 GB each | Mac | **Do NOT keep.** Regenerate from adapter + base. |
 | Eval outputs / logs | 1–10 GB | Mac | Keep. This is your results record. |
 
-- **The 512 GB rule:** the root SSD holds the OS and conda envs — nothing else. Every large path
-  points at `/data`.
+- **The 512 GB rule, amended:** the root SSD now holds everything, because the 1 TB is NTFS and
+  unavailable. Every large path still points at `/data` — that path just resolves to the root disk.
+  **391 GB free is ample for this box's job, but it is no longer an unbounded budget.** Watch it.
 - **The rule:** anything regenerable in under an hour gets deleted. Anything that took a day to
   produce gets kept forever.
 - **The trap:** merged models. Large, and a pure function of adapter + base. Never store them.
@@ -239,7 +241,8 @@ export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 ```
 
 > Setting `HF_HOME` **before the first download** is the single cheapest mistake to avoid.
-> Otherwise the model cache silently fills the 512 GB root partition and takes the desktop down with it.
+> On this box the cache **is** on the root partition, so this is a live risk rather than a hypothetical
+> one. `df -h /` before any large download.
 
 ## Smoke tests — all must pass before writing project code
 

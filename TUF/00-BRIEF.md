@@ -88,7 +88,7 @@ sandbox → eval harness → baseline → data curation → SFT → RFT → DPO 
 - Python: comfortable with classes, generators, context managers
 - PyTorch: tensors, autograd, what `.backward()` does
 - The transformer block, at least conceptually
-- Git, virtualenv/conda, the shell
+- Git, venv + pip, the shell
 - Willingness to read tracebacks instead of guessing
 
 **You do not need these**

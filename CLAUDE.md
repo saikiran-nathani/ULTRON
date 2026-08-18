@@ -169,14 +169,16 @@ In this order: `model.print_trainable_parameters()` (is it 0.0%?) → optimizer 
 ## 9. First-run environment setup
 
 ```bash
-# One-time: put caches on the big drive, not ~
-export HF_HOME=/path/to/big/drive/hf
+# One-time: put caches on ext4, never on the NTFS volume (the HF cache needs symlinks;
+# on NTFS huggingface_hub falls back to copying and doubles disk use per model).
+# `/data` here is a plain directory on the 512 GB ext4 root: sudo mkdir -p /data && sudo chown -R $USER:$USER /data
+export HF_HOME=/data/hf
 export HF_DATASETS_CACHE=$HF_HOME/datasets
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
-conda create -n ultron python=3.11 -y && conda activate ultron
-pip install torch --index-url https://download.pytorch.org/whl/cu128
-pip install transformers datasets accelerate peft trl bitsandbytes unsloth wandb
+python3.14 -m venv ~/venvs/ultron && source ~/venvs/ultron/bin/activate
+pip install torch                # PyPI torch 2.13 IS the cu13 build; matches the 595.84 driver
+pip install -r requirements.txt
 
 # Smoke tests — all must pass before writing project code
 python -c "import torch; assert torch.cuda.is_available(); print(torch.cuda.get_device_name(0))"
