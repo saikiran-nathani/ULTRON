@@ -149,10 +149,23 @@ def main() -> int:
         except BaseException:
             # BaseException, not Exception: a test must still count as failed when the
             # solution raises SystemExit or KeyboardInterrupt to escape it.
+            # Disarm FIRST: traceback.format_exc() opens source files to render frames,
+            # which otherwise raises a spurious fs_read_outside_cwd on EVERY ordinary
+            # test failure -- poisoning the GRPO reward with a phantom violation.
+            _STATE["armed"] = False
             tracebacks.append(f"[test {i}] " + traceback.format_exc(limit=6))
         finally:
             _STATE["armed"] = False
             sys.stdout, sys.stderr = real_out, real_err
+
+    # A solution that defines __eq__/__ne__ makes `assert f(x) == expected` true for ANY
+    # return value -- a perfect 1.0 having implemented nothing. It is among the first
+    # things a GRPO policy discovers, and the assertion itself cannot detect it.
+    # Flag it here; the reward function must treat eq_override as a hard zero.
+    for _obj in ns.values():
+        if isinstance(_obj, type) and ("__eq__" in vars(_obj) or "__ne__" in vars(_obj)):
+            _flag("eq_override")
+            break
 
     _write(report_path, {
         "passed": passed,

@@ -1,0 +1,28 @@
+# ULTRON — MacBook Pro (M5 Pro, 48 GB unified, arm64). NO CUDA.
+#
+# This machine's jobs per CLAUDE.md §4:
+#   data pipeline (dedup / decontamination / filtering), teacher generation,
+#   eval harness + sandbox execution, merging, quantization, serving.
+#
+#   uv pip install -r requirements/mac.txt
+#
+# Deliberately absent (CUDA-only, will not install or will silently no-op here):
+#   bitsandbytes, unsloth, flash-attn, vllm, deepspeed  -> see requirements/cuda.txt
+
+-r base.txt
+
+# --- torch: plain PyPI wheel is the arm64/Metal build. No index-url needed. --
+# Used here for CPU dataset work + MPS inference, NOT for training.
+torch>=2.6
+
+# --- Apple-only inference: teacher generation, quick local evals ------------
+mlx>=0.22
+mlx-lm>=0.21
+
+# --- merge + quantize (CPU work, lands here) --------------------------------
+mergekit>=0.0.6
+gguf>=0.10
+
+# --- serve ------------------------------------------------------------------
+fastapi>=0.115
+uvicorn[standard]>=0.30

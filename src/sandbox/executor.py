@@ -131,7 +131,18 @@ def _limits(mem_mb: int, cpu_s: int, nproc: int, fsize_mb: int):
         # Address space. Note RLIMIT_AS caps *virtual* address space and some
         # allocators over-reserve, so this is a blunt instrument; cgroups (Level 2)
         # are stricter. It is still what turns a 40 GB allocation into a MemoryError.
-        resource.setrlimit(resource.RLIMIT_AS, (mem_mb << 20, mem_mb << 20))
+        try:
+            resource.setrlimit(resource.RLIMIT_AS, (mem_mb << 20, mem_mb << 20))
+        except (ValueError, OSError):
+            # macOS/Darwin does not support RLIMIT_AS -- it raises "current limit
+            # exceeds maximum limit" and every run() fails in preexec_fn. RLIMIT_DATA
+            # is the nearest equivalent there. On Linux this branch never fires.
+            # NOTE: RLIMIT_DATA does NOT actually cap allocation on Darwin, so memory
+            # containment is Linux-only. Run untrusted bulk execution on the TUF.
+            try:
+                resource.setrlimit(resource.RLIMIT_DATA, (mem_mb << 20, mem_mb << 20))
+            except (ValueError, OSError):
+                pass
 
         # CPU seconds. Soft limit raises SIGXCPU, which the program is allowed to
         # catch and ignore; the higher hard limit guarantees a following SIGKILL.

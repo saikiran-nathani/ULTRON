@@ -94,7 +94,15 @@ def test_memory_bomb_raises_inside_sandbox():
     """MemoryError inside the sandbox; the host is unaffected."""
     r = run("x = [0] * 10**10\n", [TRIVIAL_TEST], wall_s=15, cpu_s=10, mem_mb=256)
     assert not r.ok, r.status
-    assert r.status in ("error", "crash"), (r.status, r.traceback)
+    if sys.platform == "darwin":
+        # RLIMIT_AS is unsupported on Darwin and the RLIMIT_DATA fallback does not
+        # actually cap allocation, so a memory bomb is contained only by the wall
+        # clock. The host survives, but the mechanism differs and the process
+        # allocates freely until the timeout. Memory limiting is LINUX-ONLY --
+        # run untrusted bulk execution on the TUF, not the Mac.
+        assert r.status in ("error", "crash", "timeout"), (r.status, r.traceback)
+    else:
+        assert r.status in ("error", "crash"), (r.status, r.traceback)
     if r.status == "error":
         assert "MemoryError" in r.traceback, r.traceback
 
@@ -387,6 +395,58 @@ def _main() -> int:
     print(f"{len(cases) - len(failures)}/{len(cases)} passed\n")
     return 1 if failures else 0
 
+
+
+def test_eq_override_is_flagged():
+    """The equality-oracle hack: __eq__ returning True makes every assertion pass.
+
+    Without the flag this scores fraction=1.0 with an empty flag list -- a perfect
+    reward for implementing nothing. Verified to succeed before the fix.
+    """
+    r = run(
+        "class Always:\n    def __eq__(self, other): return True\n"
+        "def solve(x): return Always()\n",
+        ["assert solve(1) == 2", "assert solve(2) == 4"],
+        wall_s=8, cpu_s=4, mem_mb=256,
+    )
+    assert "eq_override" in r.flags, (r.status, r.fraction, r.flags)
+
+
+def test_eq_override_via_subclass_is_flagged():
+    """Same hack wearing a list costume -- must not slip past the check."""
+    r = run(
+        "class L(list):\n    def __eq__(self, o): return True\n    __hash__ = None\n"
+        "def solve(x): return L()\n",
+        ["assert solve(1) == [1]"],
+        wall_s=8, cpu_s=4, mem_mb=256,
+    )
+    assert "eq_override" in r.flags, (r.status, r.fraction, r.flags)
+
+
+def test_ordinary_failure_raises_no_filesystem_flag():
+    """A wrong answer that touches no files must carry NO flags.
+
+    traceback.format_exc() opens source files to render frames; if the audit hook is
+    still armed it fires fs_read_outside_cwd on ~100% of failures, which would make the
+    GRPO reward penalise every failure twice for a violation that never happened.
+    """
+    for code in ("def solve(x): return x * 3",
+                 "def solve(x): raise ValueError('nope')",
+                 "def solve(x): return None"):
+        r = run(code, ["assert solve(1) == 2", "assert solve(2) == 4"],
+                wall_s=8, cpu_s=4, mem_mb=256)
+        assert not r.ok
+        assert r.flags == [], (code, r.flags)
+
+
+def test_genuine_file_read_is_still_flagged():
+    """The counterpart to the test above: real I/O must still be caught."""
+    r = run(
+        "def solve(x):\n    open('/etc/hosts').read()\n    return x * 2\n",
+        ["assert solve(1) == 2"],
+        wall_s=8, cpu_s=4, mem_mb=256,
+    )
+    assert "fs_read_outside_cwd" in r.flags, r.flags
 
 if __name__ == "__main__":
     sys.exit(_main())

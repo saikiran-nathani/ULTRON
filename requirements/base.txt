@@ -1,0 +1,39 @@
+# ULTRON — machine-agnostic core.
+# Installed on BOTH the Mac and the TUF. Nothing here needs CUDA or Metal.
+# Do not install this file directly; install requirements/mac.txt or requirements/cuda.txt.
+
+# --- HF stack ---------------------------------------------------------------
+transformers>=4.57,<5
+tokenizers>=0.21
+safetensors>=0.4.5
+sentencepiece>=0.2.0
+huggingface_hub[hf_xet]>=0.34
+accelerate>=1.6
+datasets>=3.6
+peft>=0.15
+trl>=0.19
+
+# --- data curation ----------------------------------------------------------
+# datasketch = MinHash LSH, the dedup step. RAM-bound -> Mac only in practice.
+numpy>=1.26,<3
+pandas>=2.2
+pyarrow>=17
+datasketch>=1.6.5
+orjson>=3.10
+regex>=2024.5.15
+ftfy>=6.2
+
+# --- eval harness / sandbox -------------------------------------------------
+pytest>=8.2
+pytest-timeout>=2.3
+psutil>=6.0
+
+# --- tracking + CLI ---------------------------------------------------------
+wandb>=0.18
+typer>=0.12
+rich>=13.7
+tqdm>=4.66
+
+# --- dev --------------------------------------------------------------------
+ruff>=0.6
+ipython>=8.26
