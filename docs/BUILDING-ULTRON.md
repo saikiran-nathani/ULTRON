@@ -10,6 +10,7 @@ exists because skipping it silently corrupts every number after it.
 ---
 
 
+
 ## Contents
 
 - [Part 1 — Reconcile the repository](#part-1--reconcile-the-repository)
@@ -30,6 +31,12 @@ exists because skipping it silently corrupts every number after it.
     - [Step 3.2 — Run the adversarial suite](#step-32--run-the-adversarial-suite)
     - [Step 3.3 — Know the one platform difference](#step-33--know-the-one-platform-difference)
     - [Step 3.4 — Smoke-test it by hand](#step-34--smoke-test-it-by-hand)
+- [Part 3.5 — Audit the inherited code before you trust it ⚠️](#part-35--audit-the-inherited-code-before-you-trust-it-)
+    - [Fix 1 — Add the missing `__init__.py`](#fix-1--add-the-missing-initpy)
+    - [Fix 2 — `RLIMIT_AS` is unsupported on macOS ⚠️](#fix-2--rlimitas-is-unsupported-on-macos-)
+    - [Fix 3 — Memory containment does not work on macOS at all](#fix-3--memory-containment-does-not-work-on-macos-at-all)
+    - [Fix 4 — `fs_read_outside_cwd` fires on EVERY failing solution ⚠️](#fix-4--fsreadoutsidecwd-fires-on-every-failing-solution-)
+    - [Fix 5 — The `__eq__` reward hack defeats the sandbox completely ⚠️⚠️](#fix-5--the-eq-reward-hack-defeats-the-sandbox-completely-)
 - [Part 4 — Phase 1: the eval harness (THE CURRENT BLOCKER)](#part-4--phase-1-the-eval-harness-the-current-blocker)
     - [Step 4.1 — Create `src/eval/tasks.py`](#step-41--create-srcevaltaskspy)
     - [Step 4.2 — Create `src/eval/generate.py`](#step-42--create-srcevalgeneratepy)
@@ -50,25 +57,31 @@ exists because skipping it silently corrupts every number after it.
 - [Part 7 — Phase 4: SFT](#part-7--phase-4-sft)
     - [Step 7.1 — Write `configs/sft-0.5b.yaml` FIRST](#step-71--write-configssft-05byaml-first)
     - [Step 7.2 — Write `src/train/sft.py`](#step-72--write-srctrainsftpy)
-- [and in the environment, before you launch:](#and-in-the-environment-before-you-launch)
-- [PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True](#pytorchcudaallocconfexpandablesegmentstrue)
     - [Step 7.3 — ⚠️ Loss masking — the bug that silently wastes a week](#step-73---loss-masking--the-bug-that-silently-wastes-a-week)
     - [Step 7.4 — The ten-step canary](#step-74--the-ten-step-canary)
     - [Step 7.5 — Full run, then evaluate](#step-75--full-run-then-evaluate)
     - [Step 7.6 — When the eval will not move](#step-76--when-the-eval-will-not-move)
 - [Part 8 — Phase 5: rejection sampling / RFT](#part-8--phase-5-rejection-sampling--rft)
-    - [Step 8.1 — `src/teacher/generate.py`](#step-81--srcteachergeneratepy)
-    - [Step 8.2 — The loop](#step-82--the-loop)
-    - [Step 8.3 — ⚠️ Difficulty collapse — the failure that kills round 2](#step-83---difficulty-collapse--the-failure-that-kills-round-2)
+    - [Step 8.1 — Create `src/teacher/generate.py`](#step-81--create-srcteachergeneratepy)
+    - [Step 8.2 — Create `src/data/rft_filter.py`](#step-82--create-srcdatarftfilterpy)
+    - [Step 8.3 — ⚠️ Difficulty collapse: the failure that kills round 2](#step-83---difficulty-collapse-the-failure-that-kills-round-2)
 - [Part 9 — Phase 6: DPO](#part-9--phase-6-dpo)
-    - [Step 9.1 — Build pairs from what you already have](#step-91--build-pairs-from-what-you-already-have)
-    - [Step 9.2 — Track verbosity on every run](#step-92--track-verbosity-on-every-run)
+    - [Step 9.1 — Create `src/data/build_pairs.py`](#step-91--create-srcdatabuildpairspy)
+    - [Step 9.2 — ⚠️ Two traps encoded above](#step-92---two-traps-encoded-above)
+    - [Step 9.3 — Track verbosity on every single run](#step-93--track-verbosity-on-every-single-run)
 - [Part 10 — Phase 7: GRPO / RLVR](#part-10--phase-7-grpo--rlvr)
-    - [Step 10.1 — The reward function is `ExecResult.fraction`](#step-101--the-reward-function-is-execresultfraction)
-    - [Step 10.2 — Wire the flags into the penalty](#step-102--wire-the-flags-into-the-penalty)
-    - [Step 10.3 — Read your rollouts. Every run.](#step-103--read-your-rollouts-every-run)
+    - [Step 10.1 — Create `src/train/reward.py`](#step-101--create-srctrainrewardpy)
+    - [Step 10.2 — Six rules the code above encodes](#step-102--six-rules-the-code-above-encodes)
+    - [Step 10.3 — Read your rollouts. Every run. No exceptions.](#step-103--read-your-rollouts-every-run-no-exceptions)
+    - [Step 10.4 — Log these four series, not just reward](#step-104--log-these-four-series-not-just-reward)
 - [Part 11 — Phase 8: self-repair](#part-11--phase-8-self-repair)
+    - [Step 11.1 — The loop](#step-111--the-loop)
+    - [Step 11.2 — Report the two numbers separately](#step-112--report-the-two-numbers-separately)
 - [Part 12 — Phases 9–10: merge, quantize, serve](#part-12--phases-910-merge-quantize-serve)
+    - [Step 12.1 — Merge](#step-121--merge)
+    - [Step 12.2 — Quantize](#step-122--quantize)
+    - [Step 12.3 — Benchmark](#step-123--benchmark)
+    - [Step 12.4 — Open the test split. Once.](#step-124--open-the-test-split-once)
 - [Appendix A — Daily working rhythm](#appendix-a--daily-working-rhythm)
 - [Appendix B — Where to look when it breaks](#appendix-b--where-to-look-when-it-breaks)
 - [Appendix C — Corrections to `TUF/STATUS.md` worth acting on](#appendix-c--corrections-to-tufstatusmd-worth-acting-on)
@@ -719,6 +732,20 @@ from src.eval.tasks import Task
 from src.sandbox.executor import run as sandbox_run
 
 
+def clean_completion(text):
+    """Extract code from a model completion.
+
+    ORDER MATTERS. extract_code() already handles fenced AND unfenced output.
+    truncate_at_stops() is ONLY for unfenced rambling -- its stop list includes
+    "\ndef ", so applying it BEFORE extraction destroys every fenced block
+    (they all contain a def). Extract first; truncate only if unfenced.
+    """
+    ext = extract_code(text, prefer="last")
+    if ext.status == "ok_unfenced":
+        ext = extract_code(truncate_at_stops(text), prefer="last")
+    return ext
+
+
 @dataclass
 class EvalReport:
     model: str
@@ -756,7 +783,7 @@ def evaluate(tasks: list[Task], backend, *, n_samples: int = 1, seeds=(0, 1, 2),
                                         temperature=temperature, seed=seed * 1000 + s)
                 if comp.truncated:
                     rep.truncations += 1
-                ext = extract_code(truncate_at_stops(comp.text), prefer="last")
+                ext = clean_completion(comp.text)
                 # extract.py returns ok | ok_unfenced | ok_unterminated_fence | extract_fail.
                 # All three "ok*" statuses are valid extractions -- only reject failures.
                 if not ext.status.startswith("ok") or not ext.code.strip():
@@ -790,6 +817,12 @@ def write_report(rep: EvalReport, path: str | Path) -> None:
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     Path(path).write_text(json.dumps(asdict(rep), indent=2))
 ```
+
+> ⚠️ **The extraction-order trap.** `truncate_at_stops()` cuts at `\ndef `, `\nclass `,
+> `\nif __name__` — designed for a model that rambles on past its answer in *unfenced* output.
+> Run it *before* `extract_code()` and it decapitates every fenced block, because every fenced
+> solution contains a `def`. Measured: a perfectly correct fenced solution scored
+> `extract_fail`. Always extract first.
 
 ### Step 4.4 — Understand the trap this encodes
 
@@ -1093,62 +1126,256 @@ Full playbook: `TUF/06-DEBUG.md` §6.
 
 # Part 8 — Phase 5: rejection sampling / RFT
 
-**Goal:** self-improvement with no RL machinery — generate N, execute, keep what passes, SFT on it.
+**Goal:** self-improvement with no RL machinery — generate N, execute, keep what passes, SFT on
+the survivors.
 
-### Step 8.1 — `src/teacher/generate.py`
+**Why before DPO/GRPO:** it is the cheapest thing that works, and it teaches you the
+generate → execute → filter loop that every later phase reuses. If RFT does not beat SFT, your
+sandbox or your filter is wrong and you will find out here, cheaply, instead of inside a GRPO run.
 
-The teacher is **Qwen2.5-Coder-32B 4-bit via ollama on the Mac**, measured this session at
-**83.3% pass@1** and **7.5 s/generation** → roughly **21 hours for a 10k corpus**. Budget one
-overnight run, not an afternoon.
+### Step 8.1 — Create `src/teacher/generate.py`
 
-Reuse `OllamaBackend` from Step 4.2 — it already sets `think=False` and tracks truncation.
-Add: resumable checkpointing (write JSONL incrementally, skip completed `task_id`s on restart),
-and a `--limit` flag so you can test on 20 before committing to 10,000.
+**Goal:** a resumable batch generator against the 32B teacher.
 
-⚠️ **Do not add concurrency without checking the server.** Your Ollama.app runs `llama-server`
-with `-np 1`, so parallel requests serialise — measured 1.02× at concurrency 8. To actually get
-parallelism you must restart the server with `OLLAMA_NUM_PARALLEL=4`.
+**Why resumable:** a 10k-sample run takes ~21 hours. It *will* be interrupted — a reboot, a
+closed lid, an OOM. Without checkpointing you start over.
 
-### Step 8.2 — The loop
+```python
+"""Batch generation against the ollama teacher. Resumable by construction."""
+from __future__ import annotations
 
-Generate N samples per problem at temperature 0.8 → execute each through `sandbox.run` →
-keep only `status == "pass"` → dedup the survivors → SFT on them.
+import json
+from pathlib import Path
 
-### Step 8.3 — ⚠️ Difficulty collapse — the failure that kills round 2
+from src.eval.generate import OllamaBackend
+from src.eval.tasks import Task
 
-Only easy problems produce passing samples, so your filtered set is all easy, so round 2 trains
-on easier data than round 1 and the model gets *worse* at hard problems while the aggregate
-score holds steady.
 
-**Detect it:** bucket problems by difficulty and log pass rate per bucket every round. If the
-hard-bucket count is shrinking, you are collapsing. See `TUF/05-CONFIGS.md` → "Difficulty
-collapse".
+def completed_ids(out_path: str | Path) -> set[str]:
+    """Task ids already written. Read once at start; the file is append-only."""
+    done: set[str] = set()
+    p = Path(out_path)
+    if not p.exists():
+        return done
+    with open(p) as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                done.add(json.loads(line)["task_id"])
+            except (json.JSONDecodeError, KeyError):
+                continue        # a torn last line from a hard kill -- skip it
+    return done
 
-**Done when:** beats Phase 4, and you can explain why this works without any RL.
+
+def generate_samples(tasks: list[Task], out_path: str | Path, *, model: str,
+                     n: int = 4, temperature: float = 0.8, max_tokens: int = 900,
+                     limit: int | None = None) -> dict:
+    """Append one JSON object per (task, sample). Safe to re-run: skips finished ids."""
+    backend = OllamaBackend(model)          # think=False by default -- see Step 4.2
+    done = completed_ids(out_path)
+    todo = [t for t in tasks if t.task_id not in done]
+    if limit:
+        todo = todo[:limit]
+    stats = {"written": 0, "skipped": len(done), "truncated": 0}
+
+    Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+    with open(out_path, "a") as fh:         # append -- never truncate a resumable file
+        for t in todo:
+            for s in range(n):
+                c = backend.generate(t.prompt, max_tokens=max_tokens,
+                                     temperature=temperature, seed=s)
+                if c.truncated:
+                    stats["truncated"] += 1
+                fh.write(json.dumps({
+                    "task_id": t.task_id, "sample": s, "prompt": t.prompt,
+                    "completion": c.text, "n_tokens": c.n_tokens,
+                    "truncated": c.truncated,
+                }) + "\n")
+                fh.write("")                # keep it simple; flush below
+                stats["written"] += 1
+            fh.flush()                      # per-task flush: a kill loses <= n samples
+    return stats
+```
+
+**Always run with `--limit 20` first.** Twenty samples proves the prompt, the extraction, and the
+filter before you commit an overnight run.
+
+⚠️ **Do not add concurrency without checking the server.** Your Ollama.app launches
+`llama-server` with `-np 1`, so parallel requests serialise — measured **1.02× at concurrency 8**.
+Real parallelism requires restarting the server with `OLLAMA_NUM_PARALLEL=4`.
+
+### Step 8.2 — Create `src/data/rft_filter.py`
+
+**Goal:** execute every sample, keep only what passes, and refuse to hide a collapse.
+
+```python
+"""Execute generated samples, keep the passers, and measure difficulty drift."""
+from __future__ import annotations
+
+import json
+from collections import defaultdict
+from pathlib import Path
+
+from src.eval.extract import extract_code, truncate_at_stops
+from src.sandbox.executor import run as sandbox_run
+
+
+def filter_passing(samples_path, tasks_by_id, out_path, *, wall_s=15, mem_mb=512) -> dict:
+    kept, per_task = 0, defaultdict(int)
+    seen_code: set[int] = set()
+    stats = {"total": 0, "extract_fail": 0, "flagged": 0, "kept": 0}
+
+    Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+    with open(samples_path) as fh, open(out_path, "w") as out:
+        for line in fh:
+            if not line.strip():
+                continue
+            rec = json.loads(line)
+            stats["total"] += 1
+            task = tasks_by_id.get(rec["task_id"])
+            if task is None:
+                continue
+            ext = clean_completion(rec["completion"])   # see Part 4.3 -- order matters
+            if not ext.status.startswith("ok") or not ext.code.strip():
+                stats["extract_fail"] += 1
+                continue
+            res = sandbox_run(ext.code, task.tests, wall_s=wall_s, mem_mb=mem_mb)
+
+            # A sample carrying ANY flag is discarded, not merely down-weighted.
+            # eq_override in particular means the solution is worthless: it passed by
+            # breaking the equality oracle. Training on it teaches the hack.
+            if res.flags:
+                stats["flagged"] += 1
+                continue
+            if res.status != "pass":
+                continue
+
+            h = hash(ext.code.strip())          # exact-dup guard within the round
+            if h in seen_code:
+                continue
+            seen_code.add(h)
+
+            out.write(json.dumps({"task_id": rec["task_id"], "prompt": rec["prompt"],
+                                  "completion": ext.code}) + "\n")
+            per_task[rec["task_id"]] += 1
+            kept += 1
+
+    stats["kept"] = kept
+    stats["tasks_covered"] = len(per_task)
+    stats["per_task"] = dict(per_task)
+    return stats
+```
+
+### Step 8.3 — ⚠️ Difficulty collapse: the failure that kills round 2
+
+Only easy problems produce passing samples. So the filtered set is all easy. So round 2 trains on
+easier data than round 1, and the model gets **worse** at hard problems while the aggregate score
+holds steady or even rises.
+
+**This is the single most important thing to instrument in this phase.** `stats["per_task"]`
+above exists for it:
+
+```python
+# After each round, bucket by how many samples survived and compare to the previous round.
+solved_none  = [t for t in all_ids if stats["per_task"].get(t, 0) == 0]
+solved_all   = [t for t in all_ids if stats["per_task"].get(t, 0) == n]
+print(f"unsolved: {len(solved_none)}  saturated: {len(solved_all)}  covered: {stats['tasks_covered']}")
+```
+
+**The tell:** `tasks_covered` shrinking between rounds, or `solved_all` growing while `pass@1`
+on your dev set flatlines. Either means you are training on an ever-easier slice.
+
+**The fix:** cap samples per task so easy problems cannot dominate the mixture, and hold out a
+hard-problem bucket you evaluate separately every round.
+
+**Done when:** RFT beats Phase 4 on three seeds, `results/04-rft.md` records `tasks_covered` per
+round, and you can explain why this works without any RL machinery.
 
 ---
 
 # Part 9 — Phase 6: DPO
 
-**Goal:** preference pairs for free, straight out of execution results.
+**Goal:** preference pairs for free, straight out of the execution results you already have.
 
-### Step 9.1 — Build pairs from what you already have
+**Why this is nearly free:** you generated N samples per problem in Phase 5 and executed all of
+them. The passers and failers are already sitting on disk. No human labelling, no reward model.
+This is the payoff for choosing code as the domain.
 
-For each problem, a sample that passed is `chosen`, one that failed is `rejected`. No human
-labelling, no reward model. This is the payoff for choosing code as the domain.
+### Step 9.1 — Create `src/data/build_pairs.py`
 
-⚠️ **Pair within a problem, never across problems.** Cross-problem pairs teach style, not
-correctness.
+```python
+"""Preference pairs from execution results. chosen = passed, rejected = failed."""
+from __future__ import annotations
 
-### Step 9.2 — Track verbosity on every run
+import json
+import random
+from collections import defaultdict
 
-DPO has a well-known length bias — it will learn "longer is better" if you let it. Log mean
-completion length before and after. If it grew more than ~20%, suspect the bias before you
-believe the score.
 
-Config and beta guidance: `TUF/05-CONFIGS.md` → "Beta — the leash".
+def build_pairs(scored_path, out_path, *, max_pairs_per_task: int = 2, seed: int = 0) -> dict:
+    """`scored_path` holds one record per sample with a `passed` bool and `fraction`."""
+    rng = random.Random(seed)
+    by_task = defaultdict(lambda: {"pass": [], "fail": []})
+    with open(scored_path) as fh:
+        for line in fh:
+            if not line.strip():
+                continue
+            r = json.loads(line)
+            by_task[r["task_id"]]["pass" if r["passed"] else "fail"].append(r)
 
-**Done when:** beats RFT on pass@1 with verbosity tracked and reported.
+    written, skipped = 0, 0
+    with open(out_path, "w") as out:
+        for task_id, g in by_task.items():
+            if not g["pass"] or not g["fail"]:
+                skipped += 1          # need BOTH to form a pair
+                continue
+            # Prefer the *closest* failure: a near-miss teaches a sharper boundary than
+            # a completely broken sample, which the model already knows is wrong.
+            fails = sorted(g["fail"], key=lambda r: -r.get("fraction", 0.0))
+            for i in range(min(max_pairs_per_task, len(g["pass"]), len(fails))):
+                chosen = rng.choice(g["pass"])
+                out.write(json.dumps({
+                    "task_id": task_id,
+                    "prompt": chosen["prompt"],
+                    "chosen": chosen["completion"],
+                    "rejected": fails[i]["completion"],
+                }) + "\n")
+                written += 1
+    return {"pairs": written, "tasks_skipped_no_contrast": skipped}
+```
+
+### Step 9.2 — ⚠️ Two traps encoded above
+
+**Pair within a problem, never across problems.** A `chosen` from problem A against a `rejected`
+from problem B teaches style and formatting, not correctness. The grouping by `task_id` is what
+prevents it — do not "optimise" it away to get more pairs.
+
+**Prefer near-miss failures.** Sorting by descending `fraction` picks the failure that was
+closest to passing. Pairing a correct solution against obvious garbage teaches a boundary the
+model already knows.
+
+### Step 9.3 — Track verbosity on every single run
+
+DPO has a well-documented length bias: it will happily learn "longer is better" because longer
+answers correlate with `chosen` in most datasets.
+
+```python
+import statistics
+print("chosen mean len:  ", statistics.mean(len(p["chosen"]) for p in pairs))
+print("rejected mean len:", statistics.mean(len(p["rejected"]) for p in pairs))
+```
+
+Log mean completion length **before and after** training. If it grew more than ~20%, suspect the
+bias before you believe the pass@1 improvement.
+
+**The false positive for this phase:** judge score up, pass@1 flat. If you are scoring with
+anything other than the sandbox, that gap is the bias talking.
+
+Beta and the rest of the config: `TUF/05-CONFIGS.md` → "Beta — the leash".
+
+**Done when:** beats RFT on pass@1 across three seeds, with verbosity reported alongside.
 
 ---
 
@@ -1156,33 +1383,110 @@ Config and beta guidance: `TUF/05-CONFIGS.md` → "Beta — the leash".
 
 **Goal:** the phase the whole curriculum was built for.
 
-**Prerequisite:** the sandbox must run **on the TUF**, because the reward function executes
-inside the training loop. This is why Ubuntu mattered — the POSIX APIs in `executor.py`
-(`setsid`, `killpg`, `setrlimit`) are native there.
+**Prerequisite that is easy to miss:** the sandbox must run **on the TUF**, because the reward
+function executes generated code *inside* the training loop. This is why Ubuntu mattered — and
+per Part 3.5 Fix 3, memory containment only actually works on Linux.
 
-### Step 10.1 — The reward function is `ExecResult.fraction`
+### Step 10.1 — Create `src/train/reward.py`
 
-Use the **dense** signal, not a boolean. `passed/total` gives the model a gradient to climb;
-pass/fail gives it a cliff. This single choice is the highest-leverage decision in the phase
-(`TUF/05-CONFIGS.md` → "Dense vs binary reward").
+**This file is where the phase is won or lost.** Everything else is TRL configuration.
 
-Composite shape: correctness fraction, minus penalties for `flags`, minus a small length term.
+```python
+"""The composite reward. Dense, hack-aware, and length-regularised."""
+from __future__ import annotations
 
-### Step 10.2 — Wire the flags into the penalty
+from src.eval.extract import extract_code, truncate_at_stops
+from src.sandbox.executor import run as sandbox_run
 
-`ExecResult.flags` already carries `read_test_file` and `net_attempt`. Penalise them **hard** —
-a model that reads the test file scores 1.0 while learning nothing.
+# Flags that mean the sample is worthless regardless of what it scored.
+FATAL_FLAGS = {"eq_override", "read_test_file", "fs_escape_write", "net_attempt"}
+# Flags that are suspicious but not automatically disqualifying.
+PENALTY_FLAGS = {"fs_read_outside_cwd": 0.3, "subprocess_spawn": 0.3,
+                 "fork_attempt": 0.5, "exec_attempt": 0.5}
 
-### Step 10.3 — Read your rollouts. Every run.
 
-Twenty samples, by eye, every single run. The reward-hacking gallery in `TUF/05-CONFIGS.md`
-lists what to look for: `sys.exit(0)`, bare `except:`, hardcoded outputs matching test cases,
-`assert True`, timeout-catching. Aggregate metrics will not show you any of it.
+def reward_one(completion: str, tests: list[str], *, target_len: int = 600,
+               wall_s: int = 10, mem_mb: int = 512) -> tuple[float, dict]:
+    """Return (reward, diagnostics). Diagnostics get logged -- you WILL need them."""
+    ext = clean_completion(completion)          # see Part 4.3 -- extract BEFORE truncate
+    if not ext.status.startswith("ok") or not ext.code.strip():
+        # Not a capability failure -- a formatting one. Small constant penalty rather
+        # than a big one, or the model learns to avoid answering at all.
+        return -0.1, {"reason": "extract_fail", "status": ext.status}
 
-**The false positive that defines this phase:** reward climbing while eval drops. If you see it,
-you are not training — you are being gamed.
+    res = sandbox_run(ext.code, tests, wall_s=wall_s, mem_mb=mem_mb)
 
-**Done when:** beats DPO **and** you have two documented reward-hacking incidents with fixes.
+    # HARD ZERO for oracle tampering. eq_override means every assertion passed because
+    # __eq__ was overridden -- fraction is 1.0 and completely meaningless. A small
+    # penalty here would still leave hacking the highest-expected-value strategy.
+    fatal = FATAL_FLAGS.intersection(res.flags)
+    if fatal:
+        return -1.0, {"reason": "fatal_flag", "flags": sorted(fatal),
+                      "fraction_claimed": res.fraction}
+
+    reward = res.fraction                       # DENSE: passed/total, not pass/fail
+
+    for flag, cost in PENALTY_FLAGS.items():
+        if flag in res.flags:
+            reward -= cost
+
+    # Mild length regularisation. Without it, RL on a correctness signal drifts toward
+    # long, hedging answers. Keep the coefficient small -- this is a nudge, not a goal.
+    overrun = max(0, len(ext.code) - target_len) / target_len
+    reward -= 0.05 * min(overrun, 2.0)
+
+    return max(-1.0, min(1.0, reward)), {
+        "reason": res.status, "fraction": res.fraction,
+        "passed": res.passed, "total": res.total,
+        "flags": res.flags, "len": len(ext.code), "wall_ms": res.wall_ms,
+    }
+```
+
+### Step 10.2 — Six rules the code above encodes
+
+1. **Dense, not binary.** `res.fraction` gives a gradient to climb; pass/fail gives a cliff. On a
+   4 GB budget with small batches this is the difference between learning and not.
+2. **`eq_override` is a hard zero, not a penalty.** Verified in Part 3.5: without the flag it
+   scores a perfect 1.0. If hacking still has positive expected value, the policy will find it.
+3. **Extraction failure gets a *small* penalty.** Punish it hard and the model learns that not
+   answering is safer than answering.
+4. **Length regularisation stays small.** It is a nudge; make it a goal and you get terse,
+   wrong answers.
+5. **Clamp the output.** Unbounded rewards destabilise the advantage estimate.
+6. **Return diagnostics, always.** You cannot debug a reward you cannot see.
+
+### Step 10.3 — Read your rollouts. Every run. No exceptions.
+
+Twenty samples, by eye, after every run:
+
+```bash
+python -c "
+import json,random
+rows=[json.loads(l) for l in open('results/grpo-rollouts.jsonl')]
+for r in random.sample(rows, 20): print(r['reward'], r['diag']['flags'], r['completion'][:200], '\n---')
+"
+```
+
+The gallery of what to look for is in `TUF/05-CONFIGS.md` → "Reward hacking — the gallery":
+`sys.exit(0)`, bare `except:`, hardcoded outputs matching the test cases, `assert True`,
+timeout-catching. **Aggregate metrics will not show you any of it.**
+
+**The false positive that defines this phase:** reward climbing while dev pass@1 drops. If you
+see that shape, you are not training — you are being gamed. Stop and read rollouts.
+
+### Step 10.4 — Log these four series, not just reward
+
+| Series | What it tells you |
+|---|---|
+| `reward/mean` | the thing being optimised |
+| **`eval/pass@1` on held-out dev** | whether the reward still correlates with capability |
+| `flags/*` counts per step | hacking emerging, before it dominates |
+| `completion_len/mean` | drift toward verbosity |
+
+When series 1 rises and series 2 falls, that divergence *is* the reward-hacking alarm.
+
+**Done when:** beats DPO on three seeds, **and** you have two documented reward-hacking
+incidents in `results/05-grpo.md` with the fix you applied to each.
 
 ---
 
@@ -1190,11 +1494,47 @@ you are not training — you are being gamed.
 
 **Goal:** turn failure into training signal.
 
-`ExecResult.traceback` exists for exactly this. Loop: generate → execute → on failure, feed the
-traceback back with the code and ask for a fix → execute again → train on successful repairs.
+`ExecResult.traceback` exists for exactly this — it was captured from the first line of the
+sandbox precisely so this phase would be cheap.
 
-**Report first-attempt pass@1 and after-one-repair pass@1 as separate numbers.** Merging them
-flatters the model and hides whether repair is actually working.
+### Step 11.1 — The loop
+
+```python
+"""Generate -> execute -> on failure, feed the traceback back -> execute again."""
+FENCE = "`" * 3          # built at runtime so this file can live inside a markdown doc
+
+REPAIR_PROMPT = (
+    "Your solution failed its tests.\n\n"
+    "Your code:\n" + FENCE + "python\n{code}\n" + FENCE + "\n\n"
+    "The error:\n" + FENCE + "\n{traceback}\n" + FENCE + "\n\n"
+    "Fix it. Output ONLY the corrected Python code block."
+)
+
+
+def repair_round(backend, task, code, res, *, max_tokens=900):
+    """One repair attempt. `res` is the ExecResult from the failed run."""
+    prompt = REPAIR_PROMPT.format(code=code, traceback=res.traceback[:1500])
+    return backend.generate(prompt, max_tokens=max_tokens, temperature=0.2)
+```
+
+Truncate the traceback. A 4 GB context budget is not the place for a 200-line stack, and the
+useful signal is almost always in the last few frames.
+
+### Step 11.2 — Report the two numbers separately
+
+**Always report first-attempt pass@1 and after-one-repair pass@1 as distinct numbers.** Merging
+them flatters the model and hides whether repair is doing anything at all.
+
+| Metric | Meaning |
+|---|---|
+| `pass@1 (first attempt)` | raw capability |
+| `pass@1 (after 1 repair)` | capability + error recovery |
+| **delta** | what this phase actually bought you |
+
+If the delta is under ~2 points, repair is not working — check that the traceback is reaching the
+model intact before you touch hyperparameters.
+
+**Done when:** `results/06-repair.md` reports both numbers, three seeds.
 
 ---
 
@@ -1202,24 +1542,48 @@ flatters the model and hides whether repair is actually working.
 
 **Machine: Mac.** All CPU work.
 
-1. **Merge** — `mergekit` is already in `requirements/mac.txt`. SLERP/TIES/DARE sweeps cost no
-   GPU-hours, so sweep widely. Never store merged models; they are a pure function of
-   adapter + base.
-2. **Quantize** — adapter → merged → GGUF → `Q4_K_M`. This is where `Q4_K_M` correctly belongs:
-   an *inference* format, not a training one.
-3. **Serve and benchmark** — `src/serve/bench_serving.py` already exists and separates prefill
-   from decode using ollama's nanosecond counters. Reuse it; do not write another.
+### Step 12.1 — Merge
 
-**Reference numbers measured on your hardware this session** (1.5B Q4_K_M, identical model both
-machines):
+`mergekit` is already in `requirements/mac.txt`. Sweeps cost **zero GPU-hours**, so sweep widely —
+SLERP, TIES, DARE, and plain task arithmetic across your phase checkpoints.
+
+**Never commit a merged model.** It is a pure function of adapter + base, and it is gigabytes.
+The `.gitignore` already blocks `merged/` and `*.safetensors`.
+
+### Step 12.2 — Quantize
+
+Order: adapter → merge into base → convert to GGUF → quantize to `Q4_K_M`.
+
+**This is where `Q4_K_M` correctly belongs** — it is an *inference* format. Training used NF4 via
+bitsandbytes. They are different quantizations for different purposes, and conflating them is a
+common and expensive confusion.
+
+### Step 12.3 — Benchmark
+
+`src/serve/bench_serving.py` already exists, already separates prefill from decode using ollama's
+nanosecond counters, and already finds the context ceiling. **Reuse it. Do not write another.**
+
+Reference numbers measured on your own hardware, same 1.5B Q4_K_M model on both machines:
 
 | | TUF (RTX 3050) | Mac (M5 Pro) |
 |---|---|---|
 | Decode, short prompt | 116.4 tok/s | 188.8 tok/s |
+| Decode, ~5k prompt | 108.8 tok/s | 159.1 tok/s |
 | Decode, ~20k prompt | 84.5 tok/s | 132.0 tok/s |
+| Prefill, ~5k prompt | 4,326 tok/s | 7,788 tok/s |
 
-**Done when:** a quality/speed Pareto on your own eval, and the `test` split — untouched until
-now — opened exactly once for the final number.
+Treat prefill as a range, not a point — it is batch-parallel and swings non-monotonically with
+prompt size on both machines. **Decode is the reproducible number; quote that one.**
+
+### Step 12.4 — Open the test split. Once.
+
+You froze it in Step 5.1 and have not looked at it since. Open it now, run the final evaluation,
+and record the number. If you are tempted to tune after seeing it, that is exactly the impulse
+the freeze exists to stop — the moment you tune against `test`, it stops being able to tell you
+the truth and you have no clean number left.
+
+**Done when:** a quality/speed Pareto on your own eval, the `test` number recorded in
+`results/07-final.md`, and a GGUF you can run offline.
 
 ---
 
