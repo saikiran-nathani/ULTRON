@@ -81,6 +81,7 @@ Listed so they are not mistaken for open questions.
 | Student | `Qwen2.5-Coder-0.5B-Instruct` | Slides 26, 32, 61 — unchanged |
 | Stretch student | `Qwen2.5-Coder-1.5B` | Slide 25 — unchanged |
 | Verifier | sandbox + tests, not a model | Slide 8 — unchanged |
+| FIM | **Out of scope** | Slide 30 — confirmed 2026-08-20 |
 
 Slide 26 remains the governing rationale for starting from Instruct: a working baseline
 on day one, and base-vs-Instruct deferred to a Phase 6 ablation.
@@ -89,9 +90,11 @@ on day one, and base-vs-Instruct deferred to a Phase 6 ablation.
 
 ## Open items
 
-| # | Item | Detail |
-|---|---|---|
-| OQ-1 | FIM scope | Slide 30: *“FIM is out of scope for this curriculum.”* The serving benchmark on TUF measured a 32-token FIM completion (562 ms Q4). Either that was exploratory or the endpoint definition has drifted. Decide before freezing `eval_final` — a FIM regression check cannot be reconstructed after the baseline is lost. |
+None.
+
+*Resolved:* **OQ-1 (FIM scope)** — closed 2026-08-20. FIM is not needed; slide 30
+stands as written. The 32-token FIM completion in the TUF serving benchmark was
+exploratory and is not a deliverable, so `eval_final` needs no FIM regression check.
 
 ---
 
@@ -100,3 +103,4 @@ on day one, and base-vs-Instruct deferred to a Phase 6 ablation.
 | Date | Entry | Change |
 |---|---|---|
 | 2026-08-20 | OV-001 | Teacher 14B/7B → 32B-Instruct 4-bit |
+| 2026-08-20 | OQ-1 | Closed — FIM confirmed out of scope, slide 30 stands |
