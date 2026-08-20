@@ -8,6 +8,8 @@ Status: `[ ]` planned · `[x]` built · `[~]` partial
 **Status: BUILT — 190 slides.** Every topic below is in the deck.
 Regenerate with `node build.js`; build one section with `node build.js 06`.
 
+> **Post-build decisions live in [`OVERRIDES.md`](OVERRIDES.md).** Where the deck and that file disagree, OVERRIDES.md wins.
+
 ---
 
 ## PART I — ORIENTATION  → `sections/01-orientation.js`
