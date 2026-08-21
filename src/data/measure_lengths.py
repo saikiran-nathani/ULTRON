@@ -80,6 +80,9 @@ def main():
     pf = cfg["measure"]["prompt_field"]
     rf = cfg["measure"]["response_field"]
     candidates = cfg["measure"]["seq_len_candidates"]
+    if isinstance(candidates, (int, float)):   # a bare scalar is allowed
+        candidates = [candidates]
+    candidates = sorted({int(c) for c in candidates})
 
     lens, chars = [], []
     for prompt, response in iter_rows(src, pf, rf, args.limit):
