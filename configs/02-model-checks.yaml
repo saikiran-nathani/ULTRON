@@ -5,11 +5,11 @@ base_model: Qwen/Qwen2.5-Coder-0.5B-Instruct   # OVERRIDES.md: student is Instru
 
 template:
   name: qwen-chatml-v1        # version it; changing this = changing the experiment
-  system_prompt: null         # decide ONCE. Must be identical in baseline and every
+  system_prompt: nsk         # decide ONCE. Must be identical in baseline and every
                               # post-SFT run, or the first "improvement" is a prompt change.
 
 measure:
   source: ise-uiuc/Magicoder-OSS-Instruct-75K   # slide 70 starting dataset
   prompt_field: problem
   response_field: solution
-  seq_len_candidates: [512, 1024, 2048]         # CLAUDE.md: 1024 comfortable, 2048 batch 1
+  seq_len_candidates: 1024         # CLAUDE.md: 1024 comfortable, 2048 batch 1
