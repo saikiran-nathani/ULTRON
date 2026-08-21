@@ -9,7 +9,9 @@ template:
                               # post-SFT run, or the first "improvement" is a prompt change.
 
 measure:
-  source: ise-uiuc/Magicoder-OSS-Instruct-75K   # slide 70 starting dataset
-  prompt_field: problem
-  response_field: solution
+  # Custom curated set, built by hand. Not present yet -- the script exits with a
+  # clear message until it is. Row shape: data/README.md
+  source: data/interim/sft-candidates.jsonl
+  prompt_field: prompt
+  response_field: response
   seq_len_candidates: [512, 1024, 2048]         # CLAUDE.md: 1024 comfortable, 2048 batch 1

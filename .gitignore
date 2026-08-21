@@ -1,2 +1,8 @@
 __pycache__/
 *.pyc
+
+# data is append-only and regenerable; do not commit contents
+/data/**
+!/data/**/
+!/data/**/.gitkeep
+!/data/README.md

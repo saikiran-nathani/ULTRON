@@ -13,6 +13,7 @@ by hand).
 """
 import argparse
 import json
+import os
 import sys
 
 import numpy as np
@@ -20,15 +21,43 @@ import yaml
 from transformers import AutoTokenizer
 
 
+REQUIRED = ("prompt", "response")
+
+
+def _validate(row, where, prompt_field, response_field):
+    """Fail loudly, with the location, rather than 500 rows later."""
+    for field in (prompt_field, response_field):
+        if field not in row:
+            raise SystemExit(
+                f"{where}: missing field {field!r}. Present: {sorted(row)}\n"
+                f"Fix the field names in your config, or the row shape "
+                f"(see data/README.md)."
+            )
+        if not isinstance(row[field], str) or not row[field].strip():
+            raise SystemExit(f"{where}: field {field!r} is empty or not a string")
+    return row[prompt_field], row[response_field]
+
+
 def iter_rows(src, prompt_field, response_field, limit):
     """Yield (prompt, response) pairs from a JSONL path or an HF dataset id."""
     if src.endswith((".jsonl", ".json")):
+        if not os.path.exists(src):
+            raise SystemExit(
+                f"{src} does not exist yet.\n"
+                f"Build your curated set there first -- see data/README.md for the "
+                f"row shape these scripts expect."
+            )
         with open(src) as fh:
             for i, line in enumerate(fh):
                 if i >= limit:
                     return
-                row = json.loads(line)
-                yield row[prompt_field], row[response_field]
+                if not line.strip():
+                    continue
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError as exc:
+                    raise SystemExit(f"{src}:{i + 1}: invalid JSON -- {exc}")
+                yield _validate(row, f"{src}:{i + 1}", prompt_field, response_field)
     else:
         from datasets import load_dataset
 
@@ -36,7 +65,7 @@ def iter_rows(src, prompt_field, response_field, limit):
         for i, row in enumerate(ds):
             if i >= limit:
                 return
-            yield row[prompt_field], row[response_field]
+            yield _validate(row, f"{src}[{i}]", prompt_field, response_field)
 
 
 def main():
