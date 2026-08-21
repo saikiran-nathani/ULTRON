@@ -1,0 +1,13 @@
+# ULTRON — optional Mac extra: GGUF inference for the final "serve" stage.
+#
+#   uv pip install -r requirements/mac-gguf.txt
+#
+# Kept OUT of mac.txt on purpose: llama-cpp-python compiles from source against
+# Metal and the build can take several minutes or fail outright on a new macOS /
+# Xcode combo. A failure here must not take the main environment down with it.
+#
+# If the build fails, the fallback is the llama.cpp CLI directly:
+#   brew install llama.cpp
+# which gives you llama-quantize + llama-server without a Python build step.
+
+llama-cpp-python>=0.3.2

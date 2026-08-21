@@ -8,7 +8,7 @@ Status: `[ ]` planned · `[x]` built · `[~]` partial
 **Status: BUILT — 190 slides.** Every topic below is in the deck.
 Regenerate with `node build.js`; build one section with `node build.js 06`.
 
-> **Post-build decisions live in [`OVERRIDES.md`](OVERRIDES.md).** Where the deck and that file disagree, OVERRIDES.md wins.
+> **Post-build decisions live in [`BUILDING-ULTRON.md`](BUILDING-ULTRON.md#decisions-of-record) → Decisions of record.** Where the deck and that table disagree, the table wins.
 
 ---
 

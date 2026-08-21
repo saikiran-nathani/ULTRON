@@ -11,9 +11,9 @@ Assume these numbers. **Do not re-derive them.**
 | **Box** | Asus TUF A17 |
 | **GPU** | NVIDIA RTX 3050 Laptop — **4 GB VRAM**, Ampere (GA107, `sm_86`) |
 | **CPU** | AMD Ryzen 7 4800H — 8 cores / 16 threads (Zen 2, x86-64) |
-| **RAM** | **16 GB** system |
+| **RAM** | **16 GB** system — **14 Gi usable**, the iGPU reserves ~2 GB (measured 2026-08-17) |
 | **OS** | Ubuntu 26.04 LTS, ext4, no encryption |
-| **Disks** | 512 GB root (`/`) + 1 TB (`/data`) |
+| **Disks** | 512 GB ext4 root (`/`) — holds everything incl. `/data`. 1 TB is **NTFS**, 577 GB of unrelated data, not used by ULTRON (measured 2026-08-17) |
 | **Network** | Realtek RTL8111/8168 Ethernet (`r8169`). Wi-Fi does not enumerate — see [01-SETUP.md](01-SETUP.md) Step 3 |
 | **Role** | **The CUDA machine.** All GPU training happens here. |
 
@@ -32,19 +32,60 @@ Assume these numbers. **Do not re-derive them.**
 
 QLoRA + Unsloth, bf16, gradient checkpointing on.
 
+> **0.5B is the dev loop; 1.5B is the ship target.** Build the pipeline and run every ablation at
+> 0.5B where a run is 20–40 min. Re-run the settled recipe at 1.5B **once** (2–3 hours) and quantize
+> to Q4_K_M. GRPO in particular is only comfortable at 0.5B on this card.
+
 | Model | seq_len | batch | grad_accum | Status |
 |---|---|---|---|---|
-| **Qwen2.5-Coder-0.5B** | 1024 | 2 | 8 | Comfortable — the default workhorse |
+| **Qwen2.5-Coder-0.5B** | 1024 | 2 | 8 | Comfortable — **the dev loop.** 20–40 min/run |
 | **Qwen2.5-Coder-0.5B** | 2048 | 1 | 16 | Fine |
-| **Qwen2.5-Coder-1.5B** | 512 | 1 | 16 | Tight but works. **Unsloth required.** |
+| **Qwen2.5-Coder-1.5B** | 512 | 1 | 16 | Tight but works. **Unsloth required.** ← ship target |
 | **Qwen2.5-Coder-1.5B** | 1024 | 1 | 16 | Marginal — expect to tune |
 | **Qwen2.5-Coder-3B** | 256 | 1 | 32 | Marginal at best. Usually not worth it. |
 | **Anything ≥ 7B** | — | — | — | **Does not train here. Do not propose it.** |
 
 ## What infers here
 
+### Measured — 1.5B GGUF, llama.cpp, `-ngl 99` (2026-08-18)
+
+| Model / format | VRAM loaded | VRAM @ 32K ctx | Decode (short) | Verdict |
+|---|---|---|---|---|
+| **1.5B Q4_K_M** (986 MB) | **1,394 MiB** | **2,124 MiB** | **116.4 tok/s** | Comfortable — ~1.8 GB spare even at 32K context |
+| **1.5B Q8_0** (1.6 GB) | 2,024 MiB | 2,654 MiB | 91.2 tok/s | Fits, but Q4_K_M is faster *and* smaller. No reason to ship it. |
+
+Full benchmark including prefill, long-context, and CPU-only figures is in [STATUS.md](STATUS.md).
+
+### Still estimated — not yet measured
+
+- **0.5B Q4_K_M ≈ 300–400 MB** — trivially fits. Even F16 (~1.0 GB) fits with room.
 - **3B in 4-bit ≈ 1.8 GB** — fits with room for context.
 - **7B in 4-bit ≈ 4 GB** — **does not fit** once you add KV cache. Use the Mac.
+
+### Decode and prefill have different bottlenecks
+
+This is the most useful thing the benchmark showed, and it is not obvious:
+
+| | Bound by | Does quantization help? | Measured |
+|---|---|---|---|
+| **Decode** | Memory bandwidth | **Yes** — roughly in proportion to bytes read | Q4_K_M is **20–28% faster** than Q8_0 |
+| **Prefill** | Compute | **No** — dequantization becomes pure overhead | Q8_0 is **3.9% faster** at 5k, tied at 20k |
+
+Effective bandwidth achieved: **Q8_0 ~146 GB/s (76% of the 3050's ~192 GB/s peak)**, Q4_K_M
+**~115 GB/s (60%)**. Q4_K_M gives up ~16% of peak to K-quant unpacking — which is why its speedup is
+1.28×, not the 1.62× the file-size ratio would predict.
+
+**Practical consequence:** long-prompt / short-completion workloads gain almost nothing in *speed*
+from quantization, only footprint. GRPO rollouts (short prompt, 384-token completion) sit in the
+decode-bound regime, so Q4 wins there.
+
+> ⚠️ **llama.cpp decode speed does not transfer to the TRL training loop.** GRPO rollouts go through
+> HF `generate`, which is substantially slower than llama.cpp unbatched. Do not use 116 tok/s to
+> estimate GRPO wall-clock — measure that separately.
+
+> **"Does not fit" means "gets slow", not "crashes".** llama.cpp offloads per-layer: `-ngl 20` puts
+> 20 layers on the GPU and the rest on the Ryzen. Measured CPU-only decode is 24.8 tok/s (Q4_K_M) vs
+> 116.4 on GPU — a 4.7× gap. Fine for a one-off check, useless for a bulk generation loop.
 
 ## The VRAM budget at 0.5B QLoRA
 
@@ -71,7 +112,8 @@ On a 4 GB card, half a gigabyte is 12% of your entire budget.
 |---|---|---|---|
 | Windows 11 + browser open | 500–1000 MB | ~3.0–3.5 GB | DWM compositor + browser GPU process |
 | Ubuntu, desktop on dGPU | 150–300 MB | ~3.7 GB | Avoid — no reason to drive the display from the 3050 |
-| **Ubuntu, hybrid (display on iGPU)** | **5–20 MB** | **~3.95 GB** | **The default. This is what you want.** |
+| **Ubuntu, hybrid (display on iGPU)** | **5–20 MB** | **~3.95 GB** | The target. |
+| **This box, as measured 2026-08-17** | ⚠️ **79 MiB** | ~3.87 GB | `display_active: Enabled` — something is on the dGPU. See STATUS open question 4. |
 | Ubuntu, TTY only (Ctrl+Alt+F3) | ~5 MB | ~3.95 GB | Marginal further gain; useful for the longest runs |
 
 ```bash
@@ -166,12 +208,12 @@ Single-threaded wall-clock. Divide by your worker count (8 physical cores here).
 
 | Drive | Holds | Notes |
 |---|---|---|
-| **512 GB — `/`** | Ubuntu, conda envs, PyTorch, repos, swap | ~60 GB used. **Nothing else.** |
-| **1 TB — `/data`** | `HF_HOME`, datasets, rollouts, checkpoints | This is the part that grows |
+| **512 GB — `/` (ext4)** | Ubuntu, venvs, PyTorch, repos, swap, **and `/data`** — which is a plain directory here, not a mount | 53 GB used, **391 GB free** (measured 2026-08-17). Everything ULTRON touches lives here. |
+| **1 TB — NTFS** | 577 GB of pre-existing unrelated data, auto-mounted at `/run/media/killerx8143/Storage` | **Not used by ULTRON.** NTFS breaks the HF cache's symlinks and degrades git. See [01-SETUP.md](01-SETUP.md) Step 6 amendment. |
 
 | What | Rough size | Where | Policy |
 |---|---|---|---|
-| HF model cache | 150–400 GB | Mac 3TB · TUF `/data/hf` | **Set `HF_HOME` day one.** Never on the 512 GB root. |
+| HF model cache | 150–400 GB on the Mac · **under 50 GB on the TUF** | Mac 3TB · TUF `/data/hf` (on the ext4 root) | **Set `HF_HOME` day one.** The big figure is Mac work; this box needs 0.5B (~1 GB), 1.5B (~3 GB), shards and adapters. |
 | The Stack v2 subset | 50–200 GB | Mac, `data/raw/` | Download a language subset, not the whole thing |
 | Instruction datasets | 5–20 GB | Mac, `data/raw/` | Small. Keep all versions. |
 | `data/interim` + `processed` | 20–80 GB | Mac (authoritative) | Every version kept. This is your provenance chain. |
@@ -181,8 +223,9 @@ Single-threaded wall-clock. Divide by your worker count (8 physical cores here).
 | Merged full models | 1–15 GB each | Mac | **Do NOT keep.** Regenerate from adapter + base. |
 | Eval outputs / logs | 1–10 GB | Mac | Keep. This is your results record. |
 
-- **The 512 GB rule:** the root SSD holds the OS and conda envs — nothing else. Every large path
-  points at `/data`.
+- **The 512 GB rule, amended:** the root SSD now holds everything, because the 1 TB is NTFS and
+  unavailable. Every large path still points at `/data` — that path just resolves to the root disk.
+  **391 GB free is ample for this box's job, but it is no longer an unbounded budget.** Watch it.
 - **The rule:** anything regenerable in under an hour gets deleted. Anything that took a day to
   produce gets kept forever.
 - **The trap:** merged models. Large, and a pure function of adapter + base. Never store them.
@@ -198,7 +241,8 @@ export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 ```
 
 > Setting `HF_HOME` **before the first download** is the single cheapest mistake to avoid.
-> Otherwise the model cache silently fills the 512 GB root partition and takes the desktop down with it.
+> On this box the cache **is** on the root partition, so this is a live risk rather than a hypothetical
+> one. `df -h /` before any large download.
 
 ## Smoke tests — all must pass before writing project code
 

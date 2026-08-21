@@ -18,8 +18,23 @@ That framing decides a lot of arguments before they start:
   explain, and fix two reward hacks.
 
 **Domain: code** — chosen because tests give a free, objective verifier.
-**Target model: Qwen2.5-Coder-0.5B.** 1.5B is the stretch.
-**Endpoint:** a 0.5B model running on-device via GGUF, in your editor, offline.
+**Dev loop: Qwen2.5-Coder-0.5B** — where the pipeline gets built and every ablation runs.
+**Ship target: Qwen2.5-Coder-1.5B**, served as Q4_K_M GGUF.
+**Endpoint:** a 1.5B model running on-device via GGUF, in your editor, offline.
+
+### Why two models
+
+| | Dev loop — 0.5B | Ship — 1.5B |
+|---|---|---|
+| SFT run | **20–40 min** | 2–3 hours |
+| GRPO on 4 GB | Comfortable — the deck's stated feasible size | Tight VRAM, ~3× slower generation |
+| Baseline HumanEval+ | ~26 ± 2 | ~38 ± 2 |
+| Serving footprint | ~300–400 MB Q4_K_M | **986 MB Q4_K_M · 1,394 MiB VRAM · 116 tok/s** (measured) |
+
+**Build at 0.5B, ship at 1.5B.** Experiments per week is what determines how fast you learn, and a
+2–3 hour SFT run costs you the ablation week that teaches the most. Once the recipe is settled,
+re-run it at 1.5B **once** and quantize. This is Rule 3 — *prototype at 0.5B before anything else* —
+applied deliberately rather than as a rule of thumb.
 
 ---
 
@@ -73,7 +88,7 @@ sandbox → eval harness → baseline → data curation → SFT → RFT → DPO 
 - Python: comfortable with classes, generators, context managers
 - PyTorch: tensors, autograd, what `.backward()` does
 - The transformer block, at least conceptually
-- Git, virtualenv/conda, the shell
+- Git, venv + pip, the shell
 - Willingness to read tracebacks instead of guessing
 
 **You do not need these**
@@ -161,11 +176,14 @@ Approximate placeholders — **your measured table is the real one.**
 
 | Model | HumanEval+ pass@1 | MBPP+ pass@1 | Role |
 |---|---|---|---|
-| Qwen2.5-Coder-0.5B-Instruct | ~26 ± 2 | ~40 ± 2 | **Primary student.** Everything is measured against this. |
-| Qwen2.5-Coder-1.5B-Instruct | ~38 ± 2 | ~52 ± 2 | Stretch target. Shows what scale alone buys. |
+| Qwen2.5-Coder-0.5B-Instruct | ~26 ± 2 | ~40 ± 2 | **Dev-loop baseline.** Every ablation is measured against this. |
+| Qwen2.5-Coder-1.5B-Instruct | ~38 ± 2 | ~52 ± 2 | **Ship-target baseline.** The final recipe is measured against this. |
 | Qwen2.5-Coder-7B-Instruct | ~62 ± 2 | ~68 ± 2 | Teacher / ceiling. **Mac inference only.** |
 | Qwen2.5-0.5B-Instruct (non-code) | ~12 ± 2 | ~22 ± 2 | Control. Isolates code-specific gains. |
 
+- **You need two baselines, not one.** 0.5B is what ablations are judged against; 1.5B is what the
+  shipped model is judged against. Never compare a 1.5B checkpoint to the 0.5B baseline — that gap is
+  scale, not your work.
 - **The control is the point** — it tells you how much of any gain is code-specific versus generic
   instruction-following.
 - **The ceiling is the point** — if your 0.5B approaches 7B on your custom set, you have done

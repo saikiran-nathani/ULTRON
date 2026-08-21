@@ -1,0 +1,32 @@
+# ULTRON — Asus TUF A17 (RTX 3050 Laptop, 4 GB VRAM, sm_86 / Ampere, 16 GB RAM).
+# THE TRAINING BOX. Do not install this on the Mac — none of it works there.
+#
+#   export HF_HOME=/big/drive/hf                  # BEFORE the first download
+#   export HF_DATASETS_CACHE=$HF_HOME/datasets
+#   export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+#
+#   pip install torch --index-url https://download.pytorch.org/whl/cu128
+#   pip install -r requirements/cuda.txt
+#
+# torch is installed FIRST and SEPARATELY from the cu128 index — it is
+# intentionally not listed below, so a plain `pip install -r` can never
+# overwrite the CUDA wheel with the CPU one from PyPI.
+
+-r base.txt
+
+# --- 4 GB VRAM survival kit -------------------------------------------------
+# unsloth is not optional at 1.5B: it is the difference between training and OOM.
+bitsandbytes>=0.45
+unsloth>=2025.3.19
+unsloth_zoo>=2025.3.17
+
+# --- flash attention 2 ------------------------------------------------------
+# Works on Ampere. ~20 min compile, worth it once. Needs its own invocation:
+#   pip install flash-attn --no-build-isolation
+# Left commented so it never breaks a bulk install.
+# flash-attn>=2.7
+
+# Non-negotiable trainer defaults on this box (CLAUDE.md §3):
+#   bf16=True                       <- NEVER fp16; it NaNs on step 1
+#   gradient_checkpointing=True
+#   optim="paged_adamw_8bit"

@@ -1,8 +1,57 @@
-__pycache__/
-*.pyc
+# --- OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
 
-# data is append-only and regenerable; do not commit contents
-/data/**
-!/data/**/
-!/data/**/.gitkeep
-!/data/README.md
+# --- python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+venv/
+.venv/
+env/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# --- the resolved environment, not the spec (recreate with pip install -r requirements.txt)
+requirements.lock.txt
+
+# --- model weights and quantized artefacts: large, and regenerable from adapter + base
+*.safetensors
+*.gguf
+*.bin
+*.pt
+*.ckpt
+outputs/
+adapters/
+merged/
+hf_cache/
+runs/
+
+# --- data is append-only and large; it lives on disk, never in git.
+# The directory shapes are tracked via .gitkeep, the contents never are.
+data/raw/*
+data/interim/*
+data/processed/*
+!data/**/.gitkeep
+
+# --- adapters are tens of MB and regenerable from config + data; merged models never.
+checkpoints/*
+!checkpoints/.gitkeep
+
+# --- scratch only, never canonical
+notebooks/*
+!notebooks/.gitkeep
+
+# --- run artefacts
+wandb/
+*.log
+
+# NOT ignored, deliberately:
+#   configs/     -- configs/ IS the lab notebook. A config that is not committed did not happen.
+#   results/     -- written by hand, one markdown file per phase. Your future self reads only this.
+#   data/tasks/  -- eval fixtures are .jsonl and MUST be versioned. A blanket data/**/*.jsonl
+#                   rule would silently swallow them, so the data rules above are scoped to
+#                   raw/ interim/ processed/ only.

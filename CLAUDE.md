@@ -105,8 +105,11 @@ sandbox → eval harness → baseline → data curation → SFT → RFT → DPO 
 ```
 
 - Domain: **code** — chosen because tests give a free, objective verifier.
-- Target model: **Qwen2.5-Coder-0.5B**. 1.5B is the stretch.
-- Endpoint: a 0.5B model running on-device via GGUF.
+- **Dev loop: Qwen2.5-Coder-0.5B.** Pipeline development and every ablation. 20–40 min per SFT run.
+- **Ship target: Qwen2.5-Coder-1.5B**, served as Q4_K_M GGUF (986 MB · 1,394 MiB VRAM · 116 tok/s, measured 2026-08-18).
+- Build at 0.5B for loop speed; re-run the settled recipe at 1.5B **once**. Do not iterate at 1.5B —
+  SFT there is 2–3 hours, and GRPO on 4 GB is only comfortable at 0.5B.
+- Endpoint: a 1.5B model running on-device via GGUF.
 - Full 190-slide field guide + manifest lives in `docs/` (`node build.js` regenerates).
 
 ### DSA-Python — separate repo
@@ -166,14 +169,16 @@ In this order: `model.print_trainable_parameters()` (is it 0.0%?) → optimizer 
 ## 9. First-run environment setup
 
 ```bash
-# One-time: put caches on the big drive, not ~
-export HF_HOME=/path/to/big/drive/hf
+# One-time: put caches on ext4, never on the NTFS volume (the HF cache needs symlinks;
+# on NTFS huggingface_hub falls back to copying and doubles disk use per model).
+# `/data` here is a plain directory on the 512 GB ext4 root: sudo mkdir -p /data && sudo chown -R $USER:$USER /data
+export HF_HOME=/data/hf
 export HF_DATASETS_CACHE=$HF_HOME/datasets
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
-conda create -n ultron python=3.11 -y && conda activate ultron
-pip install torch --index-url https://download.pytorch.org/whl/cu128
-pip install transformers datasets accelerate peft trl bitsandbytes unsloth wandb
+python3.14 -m venv ~/venvs/ultron && source ~/venvs/ultron/bin/activate
+pip install torch                # PyPI torch 2.13 IS the cu13 build; matches the 595.84 driver
+pip install -r requirements.txt
 
 # Smoke tests — all must pass before writing project code
 python -c "import torch; assert torch.cuda.is_available(); print(torch.cuda.get_device_name(0))"

@@ -1,7 +1,7 @@
 # Phase 2 (slides 27-28) — tokenizer length measurement + chat template verification.
 # Committed BEFORE running, per slide 13.
 
-base_model: Qwen/Qwen2.5-Coder-0.5B-Instruct   # OVERRIDES.md: student is Instruct
+base_model: Qwen/Qwen2.5-Coder-0.5B-Instruct   # D2 in docs/BUILDING-ULTRON.md
 
 template:
   name: qwen-chatml-v1        # version it; changing this = changing the experiment
