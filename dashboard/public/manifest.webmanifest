@@ -1,0 +1,14 @@
+{
+  "name": "trainwatch",
+  "short_name": "trainwatch",
+  "description": "Remote training monitoring over Tailscale.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#04070a",
+  "theme_color": "#04070a",
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}

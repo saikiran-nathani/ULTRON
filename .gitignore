@@ -49,9 +49,42 @@ notebooks/*
 wandb/
 *.log
 
+# --- trainwatch runtime state (folded in from Monitoring/) -------------------
+# The SQLite store, its WAL, heartbeats and hub blobs are machine-local and
+# per-box: the trainer and `scripts/trainwatch serve` share one DB file on the
+# machine doing the training. Never committed.
+var/
+*.db
+*.db-wal
+*.db-shm
+heartbeat*
+logs/
+.env
+.env.local
+*.key
+
+# --- trainwatch dashboard (React/Vite workspace at dashboard/) ---------------
+dashboard/node_modules/
+dashboard/dist/
+dashboard/tsconfig.tsbuildinfo
+# NOTE: src/trainwatch/server/static/ IS committed on purpose -- it is the built
+# dashboard, so the training box never needs Node installed.
+
+# --- tooling caches ---------------------------------------------------------
+.mypy_cache/
+.coverage
+htmlcov/
+dist/
+build/
+
 # NOT ignored, deliberately:
 #   configs/     -- configs/ IS the lab notebook. A config that is not committed did not happen.
 #   results/     -- written by hand, one markdown file per phase. Your future self reads only this.
 #   data/tasks/  -- eval fixtures are .jsonl and MUST be versioned. A blanket data/**/*.jsonl
 #                   rule would silently swallow them, so the data rules above are scoped to
 #                   raw/ interim/ processed/ only.
+#   src/trainwatch/server/static/  -- the BUILT dashboard. Committed so the
+#                   training box never needs Node; CI-less now, so if you change
+#                   dashboard/ you must re-run `npm run build` and commit the diff.
+#   dashboard/      -- the dashboard SOURCE. node_modules and dist are ignored
+#                   above; everything else is versioned.

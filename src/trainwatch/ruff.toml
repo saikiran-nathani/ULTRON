@@ -1,0 +1,24 @@
+# trainwatch's stricter lint standard, scoped to the code that meets it.
+#
+# It arrived here clean under these rules, from when it was its own repository,
+# and the point of a gate is that it stays green. The rest of ULTRON runs the
+# baseline set in the root pyproject.toml; widening these families repo-wide
+# would report ~21 pre-existing violations on day one and train everyone to
+# ignore the output. Move directories under this standard as they are cleaned,
+# rather than lowering it.
+extend = "../../pyproject.toml"
+
+[lint]
+extend-select = [
+  # Monitoring must never take a training run down, so this package catches
+  # broad exceptions on purpose in a handful of places. BLE makes each one a
+  # marked, justified decision and forces any new one to argue for itself.
+  "BLE",
+  # bandit: this package binds 0.0.0.0, shells out to nvidia-smi, and serves
+  # user-supplied blobs over HTTP. It is the only part of ULTRON on a network.
+  "S",
+  "A",    # builtin shadowing
+  "N",    # pep8 naming
+  "PTH",  # pathlib over os.path
+  "TID",  # banned/parent-relative imports
+]

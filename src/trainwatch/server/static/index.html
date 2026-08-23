@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <title>trainwatch</title>
+
+    <!-- iPad: fill the screen, sit under the status bar, respect the notch.
+         maximum-scale is deliberately absent: combined with
+         apple-mobile-web-app-capable it blocks pinch-zoom in standalone mode,
+         which is a WCAG 1.4.4 failure on an app whose smallest type is 8.5px. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="trainwatch" />
+    <meta name="theme-color" content="#04070a" />
+    <meta name="color-scheme" content="dark" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="/icon.svg" />
+    <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+
+    <!--
+      Three voices: Bricolage Grotesque (display), Manrope (body),
+      IBM Plex Mono (every number) — all self-hosted from /fonts (see
+      scripts/vendor-fonts.py). No third-party request: the dashboard renders
+      identically on a box with no internet, on an iPad behind a captive
+      portal, and over cellular where a CDN round-trip costs real latency.
+      The two faces that appear above the fold are preloaded.
+    -->
+    <link
+      rel="preload"
+      href="/fonts/bricolage-400-600.woff2"
+      as="font"
+      type="font/woff2"
+      crossorigin
+    />
+    <link rel="preload" href="/fonts/manrope-400-700.woff2" as="font" type="font/woff2" crossorigin />
+    <script type="module" crossorigin src="/assets/index-C-gg3k-t.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-BiBJjohb.css">
+  </head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>

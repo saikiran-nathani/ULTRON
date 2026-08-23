@@ -1,0 +1,141 @@
+/**
+ * App shell — two halves that share a tailnet and a SQLite file.
+ *
+ *   Clip / Drop / Notes  → the device hub (read/write, ADR-0003)
+ *   Train                → training telemetry (read-only)
+ *
+ * Atmosphere is composed here: a sidebar in landscape, a bottom tab bar in
+ * portrait, a keyed directional page transition, and film grain over
+ * everything without ever blocking input.
+ */
+import { useEffect, useRef, useState } from "react";
+import { motion } from "framer-motion";
+import { WifiOff } from "lucide-react";
+import { BottomBar, SCREENS, Sidebar, type Screen } from "@/components/Nav";
+import { RunPicker } from "@/components/RunPicker";
+import { ClipScreen } from "@/screens/Clip";
+import { DropScreen } from "@/screens/Drop";
+import { NotesScreen } from "@/screens/Notes";
+import { Train } from "@/screens/Train";
+import { useLiveState } from "@/lib/api";
+import { deviceName, setDeviceName, useHub } from "@/lib/hub";
+import { useSystem } from "@/lib/hooks";
+
+export default function App() {
+  const [screen, setScreen] = useState<Screen>("clip");
+  const [runId, setRunId] = useState<string | undefined>(undefined);
+  const [device, setDevice] = useState(() => deviceName());
+
+  const { hub, connection: hubConn, refresh: refreshHub } = useHub();
+  const { state, connection: trainConn } = useLiveState(runId);
+  const system = useSystem();
+
+  // Direction for the page transition: which way did we travel through the nav?
+  const index = SCREENS.findIndex((s) => s.id === screen);
+  const prev = useRef(index);
+  const dir = index >= prev.current ? 1 : -1;
+  useEffect(() => {
+    prev.current = index;
+  }, [index]);
+
+  // The tab title is the fastest status check on the desk Mac.
+  useEffect(() => {
+    const v = state?.status;
+    document.title = v && v !== "no-run" ? `${v} · trainwatch` : "trainwatch";
+  }, [state?.status]);
+
+  const renameDevice = () => {
+    const next = window.prompt("Name this device", device);
+    if (next?.trim()) {
+      setDeviceName(next);
+      setDevice(deviceName());
+      refreshHub();
+    }
+  };
+
+  const badges: Partial<Record<Screen, number>> = {
+    train: state?.events.filter((e) => e.level !== "info").length ?? 0,
+    drop: hub?.links.filter((l) => !l.opened_at).length ?? 0,
+  };
+
+  // The hub is the half you interact with, so its connection drives the chip;
+  // the training stream only matters while a run exists.
+  const connection = screen === "train" ? trainConn : hubConn;
+
+  const runPicker = state ? (
+    <RunPicker runs={state.runs} selected={state.run} onSelect={setRunId} />
+  ) : null;
+
+  return (
+    <div className="relative flex h-full w-full overflow-hidden text-fg">
+      <Sidebar
+        screen={screen}
+        onChange={setScreen}
+        connection={connection}
+        badges={badges}
+        hostname={system?.hostname}
+        device={device}
+        onRenameDevice={renameDevice}
+        peers={(hub?.devices ?? []).map((d) => ({ name: d.name, online: d.online }))}
+      />
+
+      <main className="relative flex-1 overflow-hidden">
+        <div
+          key={screen}
+          className={`relative z-10 h-full overflow-y-auto ${
+            dir >= 0 ? "page-in-fwd" : "page-in-back"
+          }`}
+        >
+          {screen === "clip" && <ClipScreen hub={hub} refresh={refreshHub} />}
+          {screen === "drop" && <DropScreen hub={hub} refresh={refreshHub} />}
+          {screen === "notes" && <NotesScreen hub={hub} refresh={refreshHub} />}
+          {screen === "train" &&
+            (state ? <Train state={state} actions={runPicker} /> : <Boot connection={trainConn} />)}
+        </div>
+      </main>
+
+      <BottomBar
+        screen={screen}
+        onChange={setScreen}
+        connection={connection}
+        badges={badges}
+      />
+
+      {/* Film grain — over everything, never blocks input. */}
+      <div
+        aria-hidden
+        className="grain pointer-events-none absolute inset-0 z-[60] opacity-[0.035] mix-blend-soft-light"
+      />
+    </div>
+  );
+}
+
+/** Wordmark + a pulsing accent hairline while the first snapshot lands. */
+function Boot({ connection }: { connection: string }) {
+  const offline = connection === "offline";
+  return (
+    <div className="grid h-full place-items-center px-8">
+      <div className="flex flex-col items-center gap-5 text-center">
+        <div className="display text-[22px] text-fg-dim">trainwatch</div>
+        <div className="relative h-px w-40 overflow-hidden bg-line">
+          <motion.div
+            className="absolute inset-y-0 w-1/3 bg-accent"
+            animate={{ x: ["-100%", "300%"] }}
+            transition={{ duration: 1.6, repeat: Infinity, ease: "easeInOut" }}
+          />
+        </div>
+        {offline ? (
+          <div className="flex max-w-[38ch] flex-col items-center gap-2">
+            <WifiOff size={16} className="text-[var(--color-bad)]" />
+            <p className="text-[12px] leading-relaxed text-fg-muted">
+              Can&apos;t reach the box. Check Tailscale is up on both devices — and remember the
+              real test is loading this over cellular with wifi off.
+            </p>
+          </div>
+        ) : (
+          <p className="label">connecting</p>
+        )}
+      </div>
+    </div>
+  );
+}

@@ -30,3 +30,13 @@ unsloth_zoo>=2025.3.17
 #   bf16=True                       <- NEVER fp16; it NaNs on step 1
 #   gradient_checkpointing=True
 #   optim="paged_adamw_8bit"
+
+# --- trainwatch dashboard ---------------------------------------------------
+# The server runs on the box doing the training -- this one -- because the
+# trainer and the dashboard must open the SAME SQLite file, and the Mac and iPad
+# are tailnet clients of it. These three are the whole cost; the built frontend
+# is committed at src/trainwatch/server/static/, so no Node is needed here.
+#   scripts/trainwatch serve
+fastapi>=0.115
+uvicorn[standard]>=0.30
+python-multipart>=0.0.9

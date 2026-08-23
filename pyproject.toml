@@ -1,0 +1,104 @@
+# ULTRON — tool configuration only.
+#
+# There is deliberately no [build-system] and no [project] table: ULTRON is a
+# curriculum repository, not a distributable package. Code is imported as
+# `src.<thing>` from the repository root, and dependencies are declared in
+# `requirements/` (split by machine) rather than resolved by a build backend.
+#
+# The gates below arrived with trainwatch, which was its own repo until it was
+# folded in here. Its Python is held to the strict end of them (mypy strict,
+# ruff's security and broad-except families); the rest of ULTRON is held to the
+# common baseline. Where the two differ, the difference is annotated.
+
+# ────────────────────────────────── ruff ──────────────────────────────────
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"          # the Mac venv; the TUF runs 3.12
+src = ["src"]
+extend-exclude = ["docs/node_modules", "dashboard"]
+
+[tool.ruff.lint]
+# The repo-wide baseline. src/trainwatch/ruff.toml extends this with the
+# stricter families (S, BLE, PTH, TID, A, N) for the one package that is
+# already clean under them -- see the note there. Promote directories into that
+# standard as they are cleaned; do not lower it to match them.
+select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM", "RUF"]
+ignore = [
+  "E501",   # line length is handled by the formatter
+  "B008",   # FastAPI Depends()/Query() in defaults is idiomatic
+]
+
+[tool.ruff.lint.flake8-tidy-imports]
+# Same-package relative imports (`from .store import Store`) are correct and
+# keep a package relocatable -- which is exactly what let trainwatch move in
+# here untouched. Reaching into a parent package is not, with one deliberate
+# exception granted below for trainwatch's server subpackage.
+ban-relative-imports = "parents"
+
+[tool.ruff.lint.per-file-ignores]
+# S101 assert / S105-6 fake credentials / SLF001 reaching into _db for setup.
+"src/**/tests/*" = ["S101", "S105", "S106", "SLF001"]
+# TID252: `from ..store import Store`. The server subpackage is the one place a
+# parent-relative import is right: it is a leaf of trainwatch, not a peer, and
+# an absolute `src.trainwatch.store` would re-couple it to its location.
+"src/trainwatch/server/*" = ["TID252"]
+# N812: `import torch.nn.functional as F` is the universal PyTorch convention.
+"examples/*" = ["T201", "N812"]
+# A build-time developer script that fetches from fixed https hosts.
+"scripts/*" = ["S310"]
+
+# ────────────────────────────────── mypy ──────────────────────────────────
+
+[tool.mypy]
+python_version = "3.11"
+# Scoped to trainwatch on purpose. It arrived strict-clean and stays that way;
+# widening this to all of src/ would mean a few hundred errors on day one and a
+# gate nobody runs. Add directories here as they are brought up to standard.
+files = ["src/trainwatch"]
+# The tests are excluded, which preserves the scope this config had before
+# trainwatch moved: its tests lived at tests/, outside the package, and were
+# never type-checked. Moving them to src/trainwatch/tests/ (matching
+# src/sandbox/tests/) put them in mypy's path for the first time; strict mode on
+# a monkeypatch-heavy suite is noise, not signal.
+exclude = ["^src/trainwatch/tests/"]
+strict = true
+warn_unreachable = true
+
+[[tool.mypy.overrides]]
+# Optional extras are imported defensively at runtime; don't fail on missing stubs.
+module = [
+  "wandb.*",
+  "torch.*",
+  "torch",
+  "tensorboard.*",
+  "tensorboardX",
+  "tensorboardX.*",
+  "torch.utils.tensorboard.*",
+]
+ignore_missing_imports = true
+
+# ───────────────────────────────── pytest ─────────────────────────────────
+
+[tool.pytest.ini_options]
+# Both suites live under src/, next to what they test:
+#   src/sandbox/tests/   the adversarial suite (the ruler)
+#   src/trainwatch/tests/  the monitoring suite
+testpaths = ["src"]
+addopts = "-q --strict-markers"
+filterwarnings = ["error::DeprecationWarning:src.trainwatch.*"]
+markers = [
+  "linux_only: needs Linux kernel semantics (rlimits, /proc, process groups)",
+]
+
+# ──────────────────────────────── coverage ────────────────────────────────
+
+[tool.coverage.run]
+source = ["src/trainwatch"]
+omit = ["src/trainwatch/cli.py"]
+
+[tool.coverage.report]
+# trainwatch's actual coverage is ~84%. The floor sits just under it so a
+# regression fails rather than quietly sliding; raise it, never lower it.
+fail_under = 80
+show_missing = true

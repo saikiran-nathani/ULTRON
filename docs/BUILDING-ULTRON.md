@@ -1094,6 +1094,85 @@ optim = "paged_adamw_8bit"
 
 Starting geometry for 0.5B: `seq_len 1024`, `per_device_batch 2`, `grad_accum 8`.
 
+### Step 7.2b — Wire in trainwatch
+
+**Goal:** the run shows up on the iPad while it is happening.
+
+**Why here and not later:** retrofitting instrumentation means running the phase
+twice. `src/train/monitor.py` already exists and is the only place ULTRON imports
+trainwatch, so this is two lines in the trainer.
+
+**Nothing to install.** trainwatch used to be a nested git repo at `Monitoring/`,
+installed editable. It is now first-party source at `src/trainwatch/` — same code,
+imported as `src.trainwatch`. Its core has zero third-party dependencies, asserted
+by `src/trainwatch/tests/test_zero_dependency_core.py`. The dashboard's three
+(`fastapi`, `uvicorn`, `python-multipart`) are in `requirements/cuda.txt`, because
+the server runs on the box doing the training. Reference manual:
+`docs/trainwatch/README.md`.
+
+TRL owns the loop, so there is no per-step hook — `on_log` is the seam:
+
+```python
+from src.train.monitor import trainwatch_callback, ultron_monitor
+
+with ultron_monitor(
+    "sft",
+    model=cfg.model_id,
+    tag=cfg.tag,
+    meta={"config": args.config, "seq_len": cfg.seq_len, "seed": cfg.seed},
+) as tw:
+    trainer.add_callback(trainwatch_callback(tw))
+    trainer.train()
+```
+
+That is the whole integration. The context manager also catches CUDA OOM and
+dataloader crashes and pages you, instead of leaving a dead tmux pane.
+
+**Three things it does for you that are easy to miss:**
+
+| | |
+|---|---|
+| Renames `learning_rate` → `lr` | trainwatch's headline row keys on the short name; the wrong one gives you a row of dashes |
+| Rewrites `eval_*` → `eval/*` | slash-grouping puts eval metrics in their own panel instead of mixing them with train scalars |
+| Degrades to a no-op | if trainwatch is not importable, you get a warning and the run proceeds. A monitoring dependency must never be why a 6-hour job fails to start |
+
+**Same DB file, same machine.** `TRAINWATCH_DB` has to match between the trainer
+and `trainwatch serve`, and the server runs on the **TUF** — the box doing the
+training — with the Mac and iPad as tailnet clients. Copy `.env.example` to
+`.env` and set it there once.
+
+**Verify it end to end before the real run:**
+
+```bash
+python -c "
+from src.train.monitor import ultron_monitor
+with ultron_monitor('smoke', model='Qwen2.5-Coder-0.5B', tag='wiring') as tw:
+    for s in range(5):
+        tw.log({'loss': 2.0 - s * 0.1, 'grad_norm': 1.0, 'lr': 2e-4}, step=s)
+    print('run_id:', tw.run_id)
+"
+```
+
+```bash
+scripts/trainwatch serve
+```
+
+**Expected:** the run appears in the picker with five points on the loss chart.
+
+⚠️ **If `run_id` prints `unmonitored`**, the import failed — and since trainwatch
+is now source in this repo rather than an installed package, that means the
+process is not running from the repository root. `src` is only importable from
+there. This is the one failure mode the move introduced: it used to be a missing
+install, which was obvious; now it is a wrong working directory, which is not.
+
+The CLI is `scripts/trainwatch` (or `python -m src.trainwatch`) — the old
+`trainwatch` console script went away with the packaging. Put it on PATH if you
+want the bare word:
+
+```bash
+export PATH="$PWD/scripts:$PATH"
+```
+
 ### Step 7.3 — ⚠️ Loss masking — the bug that silently wastes a week
 
 You must train on the **completion only**, not the prompt. TRL's

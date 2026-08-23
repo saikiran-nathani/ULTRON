@@ -24,5 +24,9 @@ mergekit>=0.0.6
 gguf>=0.10
 
 # --- serve ------------------------------------------------------------------
+# Two consumers: the model-serving endpoint (Phase 10), and trainwatch's
+# dashboard if you ever run `scripts/trainwatch serve` here rather than on the
+# TUF. python-multipart is what the device hub's file upload needs.
 fastapi>=0.115
 uvicorn[standard]>=0.30
+python-multipart>=0.0.9

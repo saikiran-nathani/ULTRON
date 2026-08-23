@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# The `trainwatch` command, now that trainwatch lives inside ULTRON rather than
+# as its own installed distribution. Always execs from the repository root: the
+# CLI resolves `.env` and the default `var/` paths against the CWD, and `src` is
+# only importable from there.
+#
+#   scripts/trainwatch serve
+#   scripts/trainwatch doctor
+#
+# Put it on PATH if you want the bare word to work:
+#   export PATH="$PWD/scripts:$PATH"
+set -euo pipefail
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
+PY="${PYTHON:-}"
+if [[ -z "$PY" ]]; then
+  if [[ -x .venv/bin/python ]]; then PY=.venv/bin/python; else PY=python3; fi
+fi
+exec "$PY" -m src.trainwatch "$@"
