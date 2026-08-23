@@ -13,6 +13,8 @@ venv/
 .venv/
 env/
 .ruff_cache/
+# unsloth codegens patched trainer sources into cwd on import; 3.4 MB, regenerable
+unsloth_compiled_cache/
 .ipynb_checkpoints/
 
 # --- the resolved environment, not the spec (recreate with pip install -r requirements.txt)

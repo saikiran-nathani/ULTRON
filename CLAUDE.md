@@ -168,24 +168,74 @@ In this order: `model.print_trainable_parameters()` (is it 0.0%?) → optimizer 
 
 ## 9. First-run environment setup
 
-```bash
-# One-time: caches go on /data — the 1 TB, ext4, mounted by UUID (reformatted 2026-08-23).
-# It was NTFS; the dirty bit dropped it on every reboot, and the HF cache needs symlinks
-# (on NTFS huggingface_hub copies instead, doubling disk use per model).
-# Verify with `findmnt /data` before a long run — an unmounted /data falls back to a
-# root-owned dir on /, where writes fail loudly rather than filling the OS disk.
-export HF_HOME=/data/hf
-export HF_DATASETS_CACHE=$HF_HOME/datasets
-export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+**Already done on this box (2026-08-22).** This section is the record of what was built,
+not a to-do. Re-run only when rebuilding the machine.
 
-python3.14 -m venv ~/venvs/ultron && source ~/venvs/ultron/bin/activate
-pip install torch                # PyPI torch 2.13 IS the cu13 build; matches the 595.84 driver
-pip install -r requirements.txt
+### Storage split — `~/.config/ml-storage.sh` owns it
 
-# Smoke tests — all must pass before writing project code
-python -c "import torch; assert torch.cuda.is_available(); print(torch.cuda.get_device_name(0))"
-python -m bitsandbytes
-python -c "from unsloth import FastLanguageModel; print('unsloth ok')"
+Sourced from `~/.bashrc`, so every shell gets it. Do not re-export these anywhere else.
+
+| Drive | Holds | Why |
+|---|---|---|
+| `/` — nvme1n1p2, ext4, 476 GB | interpreters, venvs, **uv/pip caches**, IDEs, source repos | millions of small files; all reconstructible from `requirements/` + git |
+| `/data` — nvme0n1p1, ext4, 916 GB | model weights, datasets, checkpoints, run outputs, GGUF | few files, enormous, expensive to re-download |
+
+```
+/data/hf        HF_HOME           /data/datasets  ML_DATASETS   curated JSONL
+/data/hf/datasets HF_DATASETS_CACHE  /data/runs   ML_RUNS       adapters, logs, ckpts
+/data/torch     TORCH_HOME        /data/models    ML_MODELS     merged / GGUF exports
+/data/ollama    OLLAMA_MODELS     /data/projects  ML_PROJECTS
 ```
 
-Setting `HF_HOME` **before the first download** is the single cheapest mistake to avoid — otherwise the model cache silently fills the home partition.
+**The uv/pip caches stay on `/` deliberately.** uv hardlinks packages out of its cache into
+each venv, and hardlinks cannot cross filesystems — move `~/.cache/uv` to `/data` and every
+install silently degrades into a full copy.
+
+`/data` was NTFS until 2026-08-22; the dirty bit dropped it on every reboot, and
+`huggingface_hub` cannot symlink on NTFS so it copies instead, doubling disk use per model.
+Now ext4, mounted by UUID from `/etc/fstab` with `nofail`. **Verify with `findmnt /data`
+before a long run** — unmounted, the paths resolve to a root-owned dir on `/` and writes fail
+loudly with EACCES rather than quietly filling the OS disk. That is the intended failure mode.
+
+### The environment
+
+`uv` + **Python 3.12**, venv at the repo root. Not conda. Not 3.14 — bitsandbytes and unsloth
+have no wheels for it, forcing source builds on the machine least able to afford them.
+
+```bash
+sudo apt install -y build-essential tmux    # gcc is NOT optional: Triton JIT-compiles
+                                            # unsloth's kernels at runtime and needs cc
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+cd ~/projects/ULTRON
+uv venv --python 3.12 .venv && source .venv/bin/activate   # or just: ultron
+uv pip install torch --index-url https://download.pytorch.org/whl/cu128
+python -c "import torch; print(torch.cuda.get_device_capability())"   # must be (8, 6)
+uv pip install -r requirements/cuda.txt     # torch is deliberately absent from this file
+```
+
+⚠️ **`cuda.txt` protects `torch` from being clobbered by the PyPI CPU wheel, but not
+`torchvision`.** It resolves to the plain PyPI build, whose compiled ops will not load against
+`torch+cu128` — unsloth then fails to import with `operator torchvision::nms does not exist`.
+Fix, every time you rebuild the venv:
+
+```bash
+uv pip install --reinstall --no-deps --index-url https://download.pytorch.org/whl/cu128 "torchvision==0.26.0"
+```
+
+### The gate
+
+```bash
+python scripts/smoke_test.py                              # 10/10, exit 0
+python -m pytest src/sandbox/tests/test_adversarial.py -q # 23 passed
+```
+
+Measured 2026-08-22: torch 2.11.0+cu128 · transformers 4.57.6 · trl 0.24.0 · peft 0.20.0 ·
+unsloth 2026.8.19 · bitsandbytes 0.50.1. Qwen2.5-Coder-0.5B-Instruct in NF4 loads at **436 MiB,
+peak 471 MiB of 4096**.
+
+⚠️ **`trl 0.24.0` has no `DataCollatorForCompletionOnlyLM`** — it was removed during the 0.2x
+line. Loss masking (the bug that silently wastes a week) now goes through
+`SFTConfig(assistant_only_loss=True)`, which requires a chat template carrying `{% generation %}`
+markers. `docs/BUILDING-ULTRON.md` Step 7.3 still documents the old collator; verify masking by
+decoding `labels != -100` regardless of which path you take.
