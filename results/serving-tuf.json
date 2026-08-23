@@ -1,0 +1,319 @@
+{
+  "host": {
+    "platform": "Linux-7.0.0-30-generic-x86_64-with-glibc2.43",
+    "machine": "x86_64",
+    "python": "3.12.14",
+    "accelerator": "CUDA: NVIDIA GeForce RTX 3050 Laptop GPU, 4096 MiB"
+  },
+  "generated": "2026-08-22T23:50:58-0400",
+  "results": [
+    {
+      "model": "qwen2.5-coder:0.5b",
+      "weights_mib": 553,
+      "decode_tps": [
+        231.6,
+        240.8,
+        241.7
+      ],
+      "ttft_ms": [
+        245,
+        250,
+        245
+      ],
+      "prompt_sweep": [
+        {
+          "prompt_tokens": 620,
+          "prefill_tps": 11831.4,
+          "decode_tps": 239.9,
+          "ttft_ms": 296,
+          "offload_ratio": 1.0,
+          "vram_mib": 553,
+          "num_ctx": 8192
+        },
+        {
+          "prompt_tokens": 6351,
+          "prefill_tps": 9566.8,
+          "decode_tps": 201.1,
+          "ttft_ms": 4174,
+          "offload_ratio": 1.0,
+          "vram_mib": 581,
+          "num_ctx": 10000
+        },
+        {
+          "prompt_tokens": 20623,
+          "prefill_tps": 7086.3,
+          "decode_tps": 169.1,
+          "ttft_ms": 6473,
+          "offload_ratio": 1.0,
+          "vram_mib": 878,
+          "num_ctx": 32000
+        }
+      ],
+      "ctx_ceiling": {
+        "ceiling": 32768,
+        "ladder": [
+          {
+            "num_ctx": 4096,
+            "offload_ratio": 1.0,
+            "vram_mib": 459,
+            "decode_tps": 204.7,
+            "full_offload": true
+          },
+          {
+            "num_ctx": 8192,
+            "offload_ratio": 1.0,
+            "vram_mib": 553,
+            "decode_tps": 206.7,
+            "full_offload": true
+          },
+          {
+            "num_ctx": 16384,
+            "offload_ratio": 1.0,
+            "vram_mib": 665,
+            "decode_tps": 200.5,
+            "full_offload": true
+          },
+          {
+            "num_ctx": 32768,
+            "offload_ratio": 1.0,
+            "vram_mib": 889,
+            "decode_tps": 203.0,
+            "full_offload": true
+          }
+        ]
+      },
+      "degraded_any": false
+    },
+    {
+      "model": "qwen2.5-coder:1.5b",
+      "weights_mib": 1297,
+      "decode_tps": [
+        114.4,
+        115.1,
+        115.5
+      ],
+      "ttft_ms": [
+        249,
+        251,
+        258
+      ],
+      "prompt_sweep": [
+        {
+          "prompt_tokens": 620,
+          "prefill_tps": 4668.6,
+          "decode_tps": 113.0,
+          "ttft_ms": 380,
+          "offload_ratio": 1.0,
+          "vram_mib": 1297,
+          "num_ctx": 8192
+        },
+        {
+          "prompt_tokens": 6351,
+          "prefill_tps": 3974.7,
+          "decode_tps": 103.8,
+          "ttft_ms": 5384,
+          "offload_ratio": 1.0,
+          "vram_mib": 1357,
+          "num_ctx": 10000
+        },
+        {
+          "prompt_tokens": 20623,
+          "prefill_tps": 2868.9,
+          "decode_tps": 84.0,
+          "ttft_ms": 11053,
+          "offload_ratio": 1.0,
+          "vram_mib": 1995,
+          "num_ctx": 32000
+        }
+      ],
+      "ctx_ceiling": {
+        "ceiling": 32768,
+        "ladder": [
+          {
+            "num_ctx": 4096,
+            "offload_ratio": 1.0,
+            "vram_mib": 1112,
+            "decode_tps": 110.4,
+            "full_offload": true
+          },
+          {
+            "num_ctx": 8192,
+            "offload_ratio": 1.0,
+            "vram_mib": 1297,
+            "decode_tps": 111.8,
+            "full_offload": true
+          },
+          {
+            "num_ctx": 16384,
+            "offload_ratio": 1.0,
+            "vram_mib": 1537,
+            "decode_tps": 109.0,
+            "full_offload": true
+          },
+          {
+            "num_ctx": 32768,
+            "offload_ratio": 1.0,
+            "vram_mib": 2017,
+            "decode_tps": 110.4,
+            "full_offload": true
+          }
+        ]
+      },
+      "degraded_any": false
+    },
+    {
+      "model": "qwen2.5-coder:1.5b-instruct-q8_0",
+      "weights_mib": 1927,
+      "decode_tps": [
+        88.3,
+        88.2,
+        90.4
+      ],
+      "ttft_ms": [
+        258,
+        257,
+        262
+      ],
+      "prompt_sweep": [
+        {
+          "prompt_tokens": 620,
+          "prefill_tps": 5029.9,
+          "decode_tps": 92.7,
+          "ttft_ms": 381,
+          "offload_ratio": 1.0,
+          "vram_mib": 1927,
+          "num_ctx": 8192
+        },
+        {
+          "prompt_tokens": 6351,
+          "prefill_tps": 4232.1,
+          "decode_tps": 83.5,
+          "ttft_ms": 6714,
+          "offload_ratio": 1.0,
+          "vram_mib": 1987,
+          "num_ctx": 10000
+        },
+        {
+          "prompt_tokens": 20623,
+          "prefill_tps": 2971.5,
+          "decode_tps": 70.0,
+          "ttft_ms": 10978,
+          "offload_ratio": 1.0,
+          "vram_mib": 2532,
+          "num_ctx": 32000
+        }
+      ],
+      "ctx_ceiling": {
+        "ceiling": 32768,
+        "ladder": [
+          {
+            "num_ctx": 4096,
+            "offload_ratio": 1.0,
+            "vram_mib": 1742,
+            "decode_tps": 89.4,
+            "full_offload": true
+          },
+          {
+            "num_ctx": 8192,
+            "offload_ratio": 1.0,
+            "vram_mib": 1927,
+            "decode_tps": 89.7,
+            "full_offload": true
+          },
+          {
+            "num_ctx": 16384,
+            "offload_ratio": 1.0,
+            "vram_mib": 2167,
+            "decode_tps": 89.6,
+            "full_offload": true
+          },
+          {
+            "num_ctx": 32768,
+            "offload_ratio": 1.0,
+            "vram_mib": 2554,
+            "decode_tps": 89.3,
+            "full_offload": true
+          }
+        ]
+      },
+      "degraded_any": false
+    },
+    {
+      "model": "qwen2.5-coder:3b",
+      "weights_mib": 2291,
+      "decode_tps": [
+        71.9,
+        71.8,
+        71.6
+      ],
+      "ttft_ms": [
+        265,
+        269,
+        271
+      ],
+      "prompt_sweep": [
+        {
+          "prompt_tokens": 620,
+          "prefill_tps": 2529.1,
+          "decode_tps": 72.6,
+          "ttft_ms": 522,
+          "offload_ratio": 1.0,
+          "vram_mib": 2291,
+          "num_ctx": 8192
+        },
+        {
+          "prompt_tokens": 6351,
+          "prefill_tps": 2193.2,
+          "decode_tps": 63.9,
+          "ttft_ms": 9406,
+          "offload_ratio": 1.0,
+          "vram_mib": 2281,
+          "num_ctx": 10000
+        },
+        {
+          "prompt_tokens": 20623,
+          "prefill_tps": 1358.6,
+          "decode_tps": 10.6,
+          "ttft_ms": 21398,
+          "offload_ratio": 0.814,
+          "vram_mib": 2547,
+          "num_ctx": 32000
+        }
+      ],
+      "ctx_ceiling": {
+        "ceiling": 16384,
+        "ladder": [
+          {
+            "num_ctx": 4096,
+            "offload_ratio": 1.0,
+            "vram_mib": 2059,
+            "decode_tps": 69.0,
+            "full_offload": true
+          },
+          {
+            "num_ctx": 8192,
+            "offload_ratio": 1.0,
+            "vram_mib": 2291,
+            "decode_tps": 70.2,
+            "full_offload": true
+          },
+          {
+            "num_ctx": 16384,
+            "offload_ratio": 1.0,
+            "vram_mib": 2503,
+            "decode_tps": 71.4,
+            "full_offload": true
+          },
+          {
+            "num_ctx": 32768,
+            "offload_ratio": 0.8138,
+            "vram_mib": 2570,
+            "decode_tps": 45.5,
+            "full_offload": false
+          }
+        ]
+      },
+      "degraded_any": true
+    }
+  ]
+}
