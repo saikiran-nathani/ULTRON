@@ -171,9 +171,15 @@ In this order: `model.print_trainable_parameters()` (is it 0.0%?) → optimizer 
 **Already done on this box (2026-08-22).** This section is the record of what was built,
 not a to-do. Re-run only when rebuilding the machine.
 
-### Storage split — `~/.config/ml-storage.sh` owns it
+### Storage split — `TUF/ml-storage.sh` owns it
 
-Sourced from `~/.bashrc`, so every shell gets it. Do not re-export these anywhere else.
+Version-controlled in this repo. `~/.config/ml-storage.sh` is a **symlink** to it and
+`~/.bashrc` sources that path, so every shell gets it and the policy survives a rebuild.
+Do not re-export these anywhere else. To restore the link on a fresh box:
+
+```bash
+ln -s "$HOME/projects/ULTRON/TUF/ml-storage.sh" ~/.config/ml-storage.sh
+```
 
 | Drive | Holds | Why |
 |---|---|---|
