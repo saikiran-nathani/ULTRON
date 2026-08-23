@@ -37,9 +37,9 @@ Everything below was run on the hardware this session. ✅ = verified, ❌ = ver
 | Display on the iGPU | `display_active: Disabled`, idle 5–20 MB | ⚠️ **`display_active: Enabled`, 79 MiB used** | ⚠️ |
 | CPU / RAM | 8c/16t, 16 GB | 16 threads, **14 Gi usable** (iGPU reserves ~2 GB) | ✅ |
 | Swap enlarged to 16 GB | 16 G | ❌ **4 G** (`/swap.img`), 1.5 G already in use | ❌ |
-| 1 TB ext4 at `/data` by UUID | ext4, owned by `$USER` | ❌ **NTFS**, 577 G used, auto-mounted at `/run/media/killerx8143/Storage` | ❌ |
-| `/data` exists | mounted | ❌ **does not exist** | ❌ |
-| `HF_HOME=/data/hf` set before any download | `/data/hf` | ❌ **unset**, and absent from `~/.bashrc` | ❌ |
+| 1 TB ext4 at `/data` by UUID | ext4, owned by `$USER` | ✅ **ext4**, `UUID=7ad3c44b-7ce3-4493-bce6-1b9b0bc34976`, 916 G (907 G free), reformatted 2026-08-23 | ✅ |
+| `/data` exists | mounted | ✅ **mounted from `/dev/nvme0n1p1`**, `rw,noatime` | ✅ |
+| `HF_HOME=/data/hf` set before any download | `/data/hf` | ⏳ unblocked — `/data/hf` is now a real path on the 1 TB | ⏳ |
 | Python env | conda `ultron`, py3.11 | ❌ no conda. **Only `python3.14` exists**; no `pip` module | ❌ |
 | torch + CUDA → `(8, 6)` | Ampere sm_86 | ⏳ not installed yet | ⏳ |
 | `python -m bitsandbytes` | passes | ⏳ not installed yet | ⏳ |
@@ -60,10 +60,12 @@ Everything below was run on the hardware this session. ✅ = verified, ❌ = ver
    drive**. Step 6's `wipefs -a /dev/nvme1n1` **would have erased the OS.** The step is now
    marked with a stop block and the command flagged do-not-run. *Always match on SIZE and
    MODEL, never on device name.*
-2. **`/data` resolves to a directory on the ext4 root**, not a mount of the 1 TB. The 1 TB is
-   NTFS with 577 GB of existing data, and the HF cache needs symlinks (on NTFS
-   `huggingface_hub` copies instead, doubling per-model disk use). Root has 391 GB free,
-   which is ample — the 150–400 GB cache figure is Mac work.
+2. ~~**`/data` resolves to a directory on the ext4 root**~~ — **superseded 2026-08-23.** The 1 TB
+   was reformatted to ext4 and is now a real mount at `/data`
+   (`UUID=7ad3c44b-7ce3-4493-bce6-1b9b0bc34976`, 916 G, 907 G free). The NTFS dirty bit made
+   the volume drop on every reboot; its contents were verified duplicated on the ext4 root
+   before the wipe. `HF_HOME=/data/hf` therefore lands on the 1 TB as originally designed,
+   and the root disk is no longer the constraint.
 3. **conda → pip/venv**, and **Python 3.11 → 3.14.** Ubuntu 26.04 ships *only* `python3.14`;
    3.11/3.12/3.13 are not in the archive. Verified 3.14 is fine for the whole stack: torch
    2.13 has cp314 wheels, `bitsandbytes` ships an ABI-agnostic `py3-none-manylinux` wheel,
@@ -99,7 +101,7 @@ leading `!` to run them in-session:
 
 1. ☐ `sudo apt update && sudo apt install -y build-essential git curl wget htop tmux nvtop python3.14-venv python3-pip unzip pkg-config mesa-utils docker.io`
 2. ☐ `sudo usermod -aG docker $USER` — then **log out and back in**, and `docker run --rm hello-world`
-3. ☐ `sudo mkdir -p /data && sudo chown -R $USER:$USER /data && mkdir -p /data/hf /data/datasets`
+3. ☑ ~~`sudo mkdir -p /data && sudo chown …`~~ — **done 2026-08-23.** 1 TB reformatted to ext4, in `/etc/fstab` by UUID, mounted at `/data`.
 4. ☐ Swap 4 G → 16 G:
    `sudo swapoff /swap.img && sudo fallocate -l 16G /swap.img && sudo chmod 600 /swap.img && sudo mkswap /swap.img && sudo swapon /swap.img`
 5. ☐ Disable lid-suspend — `01-SETUP.md` Step 5. Costs a night on a GRPO run if skipped.
@@ -120,12 +122,13 @@ leading `!` to run them in-session:
 **Do not start SFT until 13 is done.** Everything after the baseline is "better than that
 number"; if the number is wrong, every later claim is wrong.
 
-### Consider: move the working copy off NTFS
+### ~~Consider: move the working copy off NTFS~~ — resolved 2026-08-23
 
-The repo is at `/run/media/killerx8143/Storage/projects/ULTRON` — the NTFS volume. Git works
-but degrades (NTFS presents a uniform fake permission mask, so mode bits do not round-trip).
-Re-clone onto the ext4 root rather than copying. Sandbox temp dirs are unaffected; they
-default to `/tmp`, which is ext4.
+The canonical checkout is **`~/projects/ULTRON`** on the ext4 root. Three stale duplicates
+(`~/Documents/projects/ULTRON`, `~/Storage/projects/ULTRON`, `~/ULTRON-rescue`) were all at
+`ca4143c`, confirmed contained in `origin/master`, and removed. The NTFS copy's `.git/index`
+was unreadable (`index file open failed: Invalid argument`) — filesystem damage, and the
+reason its stale `origin/master` ref made an already-pushed commit look unpushed.
 
 ---
 
@@ -230,10 +233,10 @@ on a bandwidth-modest card.
 | # | Question | Status |
 |---|---|---|
 | 1 | Is the TUF's Wi-Fi genuinely dead, or disabled in BIOS? | **Open, not a blocker.** Not re-triaged this session; Ethernet is up and network works (PyPI reachable). |
-| 2 | Did the 1 TB get reformatted to ext4, or is it still NTFS? | ✅ **CLOSED — still NTFS**, 577 G used. `HF_HOME` therefore goes on the ext4 root. |
+| 2 | Did the 1 TB get reformatted to ext4, or is it still NTFS? | ✅ **CLOSED — reformatted to ext4 on 2026-08-23.** Reopened after the NTFS dirty bit dropped the volume on every reboot. 916 G at `/data`, by UUID in `/etc/fstab`. `HF_HOME=/data/hf` now lands on the 1 TB. |
 | 3 | Real measured VRAM headroom vs the estimated tables | **Partially closed.** 4096 MiB total, **79 MiB held at idle** vs 5–20 MB predicted. Full reconciliation needs torch installed. |
 | 4 | Why is `display_active: Enabled`? | **New.** 79 MiB on the dGPU. Check `glxinfo` names AMD Renoir. |
-| 5 | Move the repo off NTFS to ext4? | **New, needs your call.** Git degrades on NTFS. |
+| 5 | Move the repo off NTFS to ext4? | ✅ **CLOSED 2026-08-23.** Canonical checkout is `~/projects/ULTRON` on ext4; the NTFS copy and two other stale duplicates are gone. |
 | 6 | KV cache delta differs between quants: 730 MiB (Q4_K_M) vs 630 MiB (Q8_0) at 32K | **Open — anomaly.** KV cache is a function of architecture and context, not weight quantization. These deltas should match. Re-run with identical `--cache-type-k/v` and context flags before trusting either figure. |
 | 7 | Quality of Q4_K_M vs Q8_0 — unmeasured | **Open.** Speed says ship Q4_K_M; nothing yet confirms the quality cost is inside noise. Run `harness.py` against the served endpoint, both quants, three seeds. This is the "eval the checkpoint, ship the quant" trap. |
 

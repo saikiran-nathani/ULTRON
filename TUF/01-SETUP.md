@@ -576,7 +576,36 @@ when you are streaming datasets.
 mkdir -p /data/hf /data/datasets
 ```
 
-### 🔧 AMENDMENT — measured 2026-08-17: `/data` goes on the ext4 root
+### ✅ RESOLVED 2026-08-23: the 1 TB **was** reformatted to ext4 and mounted at `/data`
+
+The amendment below is **superseded**. It is kept because its reasoning is still correct for
+the situation it described, and because the 🛑 device-name warning at the top of this step
+remains live and load-bearing.
+
+**What actually happened.** NTFS was kept initially, per the amendment. It did not survive
+contact: the dirty bit left the volume unmountable across reboots (the `/etc/fstab` entry
+carried `force` to paper over it). The drive's contents were verified duplicated on the ext4
+root, then it was wiped:
+
+```
+UUID=7ad3c44b-7ce3-4493-bce6-1b9b0bc34976  /data  ext4  defaults,noatime,nofail  0  2
+```
+
+916 G, 907 G free. `HF_HOME=/data/hf` now lands on the 1 TB as this step originally intended,
+and the "point `HF_HOME` at the 512 GB instead" branch no longer applies.
+
+Two things worth carrying forward from doing it:
+
+- **`/boot/efi` is on `nvme1n1p1`** — the 512 GB root, not the 1 TB. `nvme0n1p1` is a 15 M
+  Microsoft Reserved partition. Wiping `nvme0n1` was therefore boot-safe. Check this with
+  `findmnt -no SOURCE /boot/efi` before wiping any disk, on any machine.
+- **`mkdir` the mountpoint, `chown` only after mounting.** That leaves the underlying `/data`
+  directory root-owned on `/`, so a failed mount produces permission-denied instead of
+  silently filling the OS disk with model downloads.
+
+---
+
+### 🔧 SUPERSEDED AMENDMENT — measured 2026-08-17: `/data` goes on the ext4 root
 
 The split above assumes the 1 TB is ext4 and mounted at `/data`. Neither is true here:
 the 1 TB is **NTFS** with **577 GB already used**, auto-mounted by the desktop at

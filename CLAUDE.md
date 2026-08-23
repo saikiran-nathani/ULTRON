@@ -169,9 +169,11 @@ In this order: `model.print_trainable_parameters()` (is it 0.0%?) → optimizer 
 ## 9. First-run environment setup
 
 ```bash
-# One-time: put caches on ext4, never on the NTFS volume (the HF cache needs symlinks;
-# on NTFS huggingface_hub falls back to copying and doubles disk use per model).
-# `/data` here is a plain directory on the 512 GB ext4 root: sudo mkdir -p /data && sudo chown -R $USER:$USER /data
+# One-time: caches go on /data — the 1 TB, ext4, mounted by UUID (reformatted 2026-08-23).
+# It was NTFS; the dirty bit dropped it on every reboot, and the HF cache needs symlinks
+# (on NTFS huggingface_hub copies instead, doubling disk use per model).
+# Verify with `findmnt /data` before a long run — an unmounted /data falls back to a
+# root-owned dir on /, where writes fail loudly rather than filling the OS disk.
 export HF_HOME=/data/hf
 export HF_DATASETS_CACHE=$HF_HOME/datasets
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True

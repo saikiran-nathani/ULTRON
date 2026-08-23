@@ -13,7 +13,7 @@ Assume these numbers. **Do not re-derive them.**
 | **CPU** | AMD Ryzen 7 4800H — 8 cores / 16 threads (Zen 2, x86-64) |
 | **RAM** | **16 GB** system — **14 Gi usable**, the iGPU reserves ~2 GB (measured 2026-08-17) |
 | **OS** | Ubuntu 26.04 LTS, ext4, no encryption |
-| **Disks** | 512 GB ext4 root (`/`) — holds everything incl. `/data`. 1 TB is **NTFS**, 577 GB of unrelated data, not used by ULTRON (measured 2026-08-17) |
+| **Disks** | 512 GB ext4 root (`/`) — Ubuntu, venvs, repos. **1 TB ext4 at `/data`** by UUID — HF cache, datasets, checkpoints (reformatted 2026-08-23) |
 | **Network** | Realtek RTL8111/8168 Ethernet (`r8169`). Wi-Fi does not enumerate — see [01-SETUP.md](01-SETUP.md) Step 3 |
 | **Role** | **The CUDA machine.** All GPU training happens here. |
 
@@ -208,12 +208,12 @@ Single-threaded wall-clock. Divide by your worker count (8 physical cores here).
 
 | Drive | Holds | Notes |
 |---|---|---|
-| **512 GB — `/` (ext4)** | Ubuntu, venvs, PyTorch, repos, swap, **and `/data`** — which is a plain directory here, not a mount | 53 GB used, **391 GB free** (measured 2026-08-17). Everything ULTRON touches lives here. |
-| **1 TB — NTFS** | 577 GB of pre-existing unrelated data, auto-mounted at `/run/media/killerx8143/Storage` | **Not used by ULTRON.** NTFS breaks the HF cache's symlinks and degrades git. See [01-SETUP.md](01-SETUP.md) Step 6 amendment. |
+| **512 GB — `/` (ext4)** | Ubuntu, venvs, PyTorch, repos, swap | 53 GB used, **391 GB free** (measured 2026-08-17). Nothing that grows lives here. |
+| **1 TB — `/data` (ext4)** | `HF_HOME`, datasets, rollouts, checkpoints — everything that grows | **916 G, 907 G free** (measured 2026-08-23). `UUID=7ad3c44b-7ce3-4493-bce6-1b9b0bc34976`, in `/etc/fstab`, `noatime`. Was NTFS; the dirty bit dropped it on every reboot. |
 
 | What | Rough size | Where | Policy |
 |---|---|---|---|
-| HF model cache | 150–400 GB on the Mac · **under 50 GB on the TUF** | Mac 3TB · TUF `/data/hf` (on the ext4 root) | **Set `HF_HOME` day one.** The big figure is Mac work; this box needs 0.5B (~1 GB), 1.5B (~3 GB), shards and adapters. |
+| HF model cache | 150–400 GB on the Mac · **under 50 GB on the TUF** | Mac 3TB · TUF `/data/hf` (on the 1 TB) | **Set `HF_HOME` day one.** The big figure is Mac work; this box needs 0.5B (~1 GB), 1.5B (~3 GB), shards and adapters. |
 | The Stack v2 subset | 50–200 GB | Mac, `data/raw/` | Download a language subset, not the whole thing |
 | Instruction datasets | 5–20 GB | Mac, `data/raw/` | Small. Keep all versions. |
 | `data/interim` + `processed` | 20–80 GB | Mac (authoritative) | Every version kept. This is your provenance chain. |
@@ -223,9 +223,12 @@ Single-threaded wall-clock. Divide by your worker count (8 physical cores here).
 | Merged full models | 1–15 GB each | Mac | **Do NOT keep.** Regenerate from adapter + base. |
 | Eval outputs / logs | 1–10 GB | Mac | Keep. This is your results record. |
 
-- **The 512 GB rule, amended:** the root SSD now holds everything, because the 1 TB is NTFS and
-  unavailable. Every large path still points at `/data` — that path just resolves to the root disk.
-  **391 GB free is ample for this box's job, but it is no longer an unbounded budget.** Watch it.
+- **The 512 GB rule, restored 2026-08-23:** the 1 TB is ext4 and mounted at `/data`, so the original
+  split holds — root carries the OS and code, `/data` carries everything that grows. **907 GB free
+  on `/data`.** The earlier "root holds everything, watch it" caveat no longer applies.
+- **Verify the mount before a long run.** If `/data` is not mounted, it falls back to an empty
+  root-owned directory on `/`. Keeping that directory root-owned is deliberate: writes fail with
+  permission denied instead of silently filling the OS disk. `findmnt /data` before anything long.
 - **The rule:** anything regenerable in under an hour gets deleted. Anything that took a day to
   produce gets kept forever.
 - **The trap:** merged models. Large, and a pure function of adapter + base. Never store them.
