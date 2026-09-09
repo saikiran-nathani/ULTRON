@@ -75,6 +75,9 @@ module = [
   "tensorboardX",
   "tensorboardX.*",
   "torch.utils.tensorboard.*",
+  # PyYAML ships no stubs and types-PyYAML is not a dependency here. Used in
+  # one place, imported lazily, for the same reason as the rest of this list.
+  "yaml",
 ]
 ignore_missing_imports = true
 

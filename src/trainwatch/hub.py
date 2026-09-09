@@ -32,6 +32,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
+from .store import connect, migrate
+
 __all__ = ["REDACTED", "ClipKind", "Hub", "looks_secret"]
 
 log = logging.getLogger("trainwatch.hub")
@@ -157,16 +159,12 @@ class Hub:
         self.blob_dir = Path(blob_dir) if blob_dir else self.path.parent / "blobs"
         self.blob_dir.mkdir(parents=True, exist_ok=True)
 
-        self._db = sqlite3.connect(self.path, timeout=15.0, check_same_thread=False)
-        self._db.row_factory = sqlite3.Row
-        self._db.execute("PRAGMA journal_mode=WAL")
-        # ADR-0004: notes and pinned clips are durable state now, not scratch.
-        self._db.execute("PRAGMA synchronous=FULL")
-        # Per-connection, and off by default. HubPool builds one Hub per worker
-        # thread, so this is the right place for it.
-        self._db.execute("PRAGMA foreign_keys=ON")
-        self._db.execute("PRAGMA busy_timeout=15000")
+        # store.connect() owns the pragmas -- see ADR-0004. Hub and Store are
+        # pointed at the same file by cfg.db_path, so a pragma set in only one
+        # of them is a bug whose presence depends on which opened first.
+        self._db = connect(self.path)
         self._db.executescript(SCHEMA)
+        migrate(self._db)
         self._db.commit()
 
     def close(self) -> None:

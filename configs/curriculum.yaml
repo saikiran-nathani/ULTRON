@@ -1,0 +1,342 @@
+# ULTRON curriculum — the seed for the progress database (ADR-0004 phase C).
+#
+# This file is the *declaration*: which phases exist, in what order, and what
+# has to be true to leave each one. It is not the live state. Live state is
+# `gate_results` rows in the database, and a phase's real status is derived
+# from them — see src/trainwatch/curriculum.py.
+#
+# Load with:  trainwatch curriculum --seed configs/curriculum.yaml
+# Idempotent: phases and gates upsert by slug, results append only when new.
+#
+# Every `results:` entry below is backfilled from a committed artifact and says
+# which one. Nothing here is asserted from memory; where the evidence is a
+# measurement that has not been taken, the gate simply has no result and the
+# phase derives as blocked. That is the whole point — an absent measurement
+# must not read as a pass.
+
+phases:
+  - slug: sandbox
+    name: Phase 0 — Sandbox
+    position: 0
+    declared: done
+    note: >-
+      Level 1: subprocess + setrlimit + setsid/killpg, dual wall/CPU timeouts,
+      env allowlist, scoring from a report file rather than an exit code.
+      Level 2 (containers) is still required before the first unattended run.
+    gates:
+      - slug: adversarial-suite
+        description: The adversarial suite passes on the CUDA machine.
+        verify_cmd: python -m pytest src/sandbox/tests/test_adversarial.py -q
+        results:
+          - passed: true
+            at: 2026-08-23
+            machine: tuf
+            evidence: >-
+              23/23 on the TUF, per results/01-doc-corrections.md. Note the
+              count: BUILDING-ULTRON.md still says 19 in four places.
+      - slug: orphan-negative-control
+        description: >-
+          Replacing killpg with proc.kill() must make the orphan test FAIL.
+          A sandbox test that passes either way proves nothing.
+        verify_cmd: see TUF/STATUS.md sandbox verification, case 05b
+        results:
+          - passed: true
+            at: 2026-08-17
+            machine: tuf
+            evidence: "ORPHAN LEAK: pids [...] survived — negative control confirmed"
+
+  - slug: eval-harness
+    name: Phase 1 — Eval harness
+    position: 1
+    declared: active
+    note: >-
+      THE CURRENT BLOCKER, and it is pure Python — no GPU, no compiler, no
+      sudo. Every number the rest of the pipeline claims is measured by this.
+    gates:
+      - slug: pass-at-k-verified
+        description: pass@k matches exact combinatorics, not the naive estimator.
+        verify_cmd: python -m src.eval.pass_at_k
+        results:
+          - passed: true
+            at: 2026-09-08
+            machine: mac
+            evidence: >-
+              Verified exhaustively over 22,960 (n,c,k) cases against exact
+              combinatorics. The naive independence estimator errs by ~4 points.
+      - slug: extract-verified
+        description: Code extraction handles fences, stop tokens and prompt echo.
+        verify_cmd: python -m pytest src/eval/ -q
+        results:
+          - passed: true
+            at: 2026-09-08
+            machine: mac
+            evidence: >-
+              extract.py reviewed; the ordering bug where
+              extract_code(truncate_at_stops(text)) decapitates a fenced block
+              is fixed by clean_completion().
+      - slug: harness-driver-exists
+        description: >-
+          src/eval/tasks.py and src/eval/harness.py exist and drive the
+          verified primitives end to end.
+        verify_cmd: python -m src.eval.harness --help
+        # No result: the files do not exist. This is what blocks the baseline.
+
+  - slug: baseline
+    name: Phase 2 — Baseline
+    position: 2
+    declared: blocked
+    note: >-
+      Blocked on Phase 1. Three seeds, recorded with the harness commit SHA and
+      the template name. Everything after this is "better than that number";
+      if the number is wrong every later claim is wrong.
+    gates:
+      - slug: baseline-recorded
+        description: results/00-baseline.md exists with three seeds.
+        verify_cmd: test -f results/00-baseline.md
+
+  - slug: data
+    name: Phase 3 — Data curation
+    position: 3
+    declared: active
+    note: >-
+      Partially built. Tokenizer and chat-template checks landed; download,
+      dedup, decontaminate and synth do not exist yet. Runs on the Mac —
+      48 GB against the TUF's 14 GiB usable.
+    gates:
+      - slug: template-verified
+        description: Chat template round-trips and carries generation markers.
+        verify_cmd: python -m src.data.verify_template
+        results:
+          - passed: true
+            at: 2026-08-22
+            machine: mac
+            evidence: src/data/verify_template.py, committed in 1183581
+      - slug: lengths-measured
+        description: Sequence-length distribution measured before picking seq_len.
+        verify_cmd: python -m src.data.measure_lengths
+        results:
+          - passed: true
+            at: 2026-08-22
+            machine: mac
+            evidence: src/data/measure_lengths.py, committed in 1183581
+      - slug: decontaminated
+        description: >-
+          Train set decontaminated against the eval set, with the overlap count
+          recorded. Skipping this is how a baseline becomes unfalsifiable.
+        verify_cmd: python -m src.data.decontaminate --report
+
+  - slug: sft
+    name: Phase 4 — SFT
+    position: 4
+    declared: blocked
+    note: >-
+      Geometry is settled by measurement: seq_len 1024, batch 1, grad_accum 16.
+      NOT 1024x2x8 — that OOMs. The binding constraint is the fp32 logits
+      tensor (vocab 151,936 x tokens_per_forward x 4 B), not model size.
+    gates:
+      - slug: loss-masking-verified
+        description: >-
+          Labels are masked to completions only, verified by decoding
+          labels != -100. trl 0.24.0 has no DataCollatorForCompletionOnlyLM;
+          use SFTConfig(assistant_only_loss=True).
+        verify_cmd: python -m src.train.sft --dry-run --show-labels
+      - slug: sft-beats-baseline
+        description: SFT checkpoint beats the baseline on held-out, three seeds.
+        verify_cmd: python -m src.eval.harness --checkpoint <path> --seeds 3
+
+  - slug: rft
+    name: Phase 5 — RFT
+    position: 5
+    declared: blocked
+    gates:
+      - slug: teacher-generation
+        description: >-
+          Teacher corpus generated and execution-filtered. 32B at 83.3% pass@1,
+          ~7.5 s/generation — about 21 h for 10k, not the 6-12 h the deck says.
+        verify_cmd: python -m src.teacher.generate --count 10000
+
+  - slug: dpo
+    name: Phase 6 — DPO
+    position: 6
+    declared: blocked
+    note: Preference pairs come free from execution results — passed vs failed.
+    gates:
+      - slug: pairs-built
+        description: Preference pairs built from sandbox execution outcomes.
+        verify_cmd: python -m src.data.pairs --from-runs
+
+  - slug: grpo
+    name: Phase 7 — GRPO
+    position: 7
+    declared: blocked
+    note: >-
+      Needs ExecResult.fraction as a dense reward, and the reward-hacking
+      gallery as a live defence. 4 GB headroom here assumes unsloth even at
+      0.5B, which is not yet measured.
+    gates:
+      - slug: reward-hacking-guarded
+        description: >-
+          Reward hacking detected, not just hoped about — sys.exit(0),
+          __eq__-always-True, bare except, test-file reads.
+        verify_cmd: python -m pytest src/sandbox/tests/test_adversarial.py -k hacking
+
+  - slug: self-repair
+    name: Phase 8 — Self-repair
+    position: 8
+    declared: blocked
+    gates:
+      - slug: traceback-to-fix
+        description: ExecResult.traceback drives a repair attempt that measurably helps.
+        verify_cmd: python -m src.eval.harness --repair-rounds 1
+
+  - slug: merge
+    name: Phase 9 — Merge and quantize
+    position: 9
+    declared: blocked
+    gates:
+      - slug: gguf-exported
+        description: Adapter merged and exported to Q4_K_M GGUF.
+        verify_cmd: ls -la /data/models/*.gguf
+
+  - slug: serve
+    name: Phase 10 — Serve
+    position: 10
+    declared: active
+    note: >-
+      Measured ahead of the training phases because the benchmark runs against
+      stock models. Ship target reproduces: 115.0 tok/s vs 116.4 in August.
+    gates:
+      - slug: serving-measured
+        description: Decode, prefill, TTFT and context ceiling measured on the real models.
+        verify_cmd: python -m src.serve.bench_serving --models qwen2.5-coder:1.5b --ctx-ceiling
+        results:
+          - passed: true
+            at: 2026-08-23
+            machine: tuf
+            evidence: >-
+              results/serving-tuf.json. 1.5B Q4_K_M at 1,297 MiB / 115.0 tok/s,
+              full offload to 32k. 3B is a 16k model — at 32k it partially
+              offloads to 0.814 and collapses to 10.6 tok/s on a 20k prompt,
+              with no error.
+      - slug: quant-quality-measured
+        description: >-
+          Q4_K_M vs Q8_0 compared on QUALITY, not just speed. Speed says ship
+          Q4; nothing yet confirms the quality cost is inside noise.
+        verify_cmd: python -m src.eval.harness --served qwen2.5-coder:1.5b --seeds 3
+
+decisions:
+  - slug: D-qlora-only
+    title: QLoRA only, never full fine-tuning
+    at: 2026-08-17
+    body: 4 GB VRAM. Not a preference — full fine-tuning does not fit.
+  - slug: D-bf16-only
+    title: bf16 always, never fp16
+    at: 2026-08-17
+    body: >-
+      Ampere (sm_86) supports bf16 natively. fp16 NaNs on step 1 on this card.
+  - slug: D-owned-hardware
+    title: No rented GPUs or cloud compute
+    at: 2026-08-17
+    body: >-
+      The point is to acquire the skills on hardware that is owned. Plan around
+      4 GB. This also rules out managed databases.
+  - slug: D-student-0.5b
+    title: 0.5B for the dev loop, 1.5B as the ship target
+    at: 2026-08-17
+    body: >-
+      Build at 0.5B for loop speed (20-40 min per SFT run); re-run the settled
+      recipe at 1.5B once. Do not iterate at 1.5B — SFT there is 2-3 hours.
+  - slug: D-python-3.14
+    title: Python 3.14, the only interpreter Ubuntu 26.04 ships
+    at: 2026-08-17
+    body: >-
+      Superseded. The premise was wrong twice over: uv downloads its own
+      interpreters, so the Ubuntu archive is irrelevant, and bitsandbytes and
+      unsloth have no 3.14 wheels — forcing source builds on the machine least
+      able to afford them.
+    superseded_by: D-python-3.12
+  - slug: D-python-3.12
+    title: uv + Python 3.12, venv at the repo root
+    at: 2026-08-22
+    body: >-
+      Verified by building it: torch 2.11.0+cu128, transformers 4.57.6,
+      trl 0.24.0, peft 0.20.0, bitsandbytes 0.50.1, unsloth 2026.8.19.
+  - slug: D-teacher-14b
+    title: Teacher is a 14B quantized model on the Mac
+    at: 2026-08-17
+    body: Superseded by measurement.
+    superseded_by: D-teacher-32b
+  - slug: D-teacher-32b
+    title: Teacher is Qwen2.5-Coder-32B 4-bit via ollama on the Mac
+    at: 2026-09-08
+    body: >-
+      Measured 83.3% pass@1 at ~7.5 s/generation. Supersedes slides 8, 25, 61.
+      A 9B reasoning model scored 33.3% only because it returns an empty
+      `response` with the chain of thought in a separate `thinking` field —
+      corrected to 76.7% vs 83.3%, not significant at n=60.
+  - slug: D-ship-q4km
+    title: Ship Q4_K_M, not Q8_0
+    at: 2026-08-23
+    body: >-
+      Q8_0 costs 23% of decode (115.0 -> 89.0 tok/s) for 630 MiB and buys
+      nothing measurable. Prefill rises slightly at Q8, which is the expected
+      shape: prefill is compute-bound and dequantizing Q4 is overhead.
+  - slug: D-store-is-record
+    title: The store is the system of record (ADR-0004)
+    at: 2026-09-09
+    body: >-
+      Fires ADR-0002's trip-wire. Brings backups, migrations and app-level auth
+      inside the tailnet. See docs/adr/0004-progress-system-of-record.md.
+
+questions:
+  - slug: OQ-1
+    question: Is the TUF's Wi-Fi genuinely dead, or disabled in BIOS?
+    status: open
+    opened: 2026-08-17
+  - slug: OQ-2
+    question: Did the 1 TB get reformatted to ext4, or is it still NTFS?
+    status: closed
+    opened: 2026-08-17
+    closed: 2026-08-23
+    resolution: >-
+      ext4, 916 G at /data, by UUID in /etc/fstab with nofail. The NTFS dirty
+      bit dropped the volume on every reboot. HF_HOME=/data/hf now lands on the
+      1 TB as designed.
+  - slug: OQ-3
+    question: What is the real measured VRAM headroom versus the estimated tables?
+    status: closed
+    opened: 2026-08-17
+    closed: 2026-08-23
+    resolution: >-
+      3,770 MiB usable, not 4,096 — the display reserves the rest. Every
+      headroom sum written against 4,096 is ~326 MiB too generous.
+  - slug: OQ-4
+    question: Why is display_active Enabled, holding VRAM at idle?
+    status: closed
+    opened: 2026-08-17
+    closed: 2026-08-23
+    resolution: >-
+      47 MiB at idle, better than the 79 MiB first recorded. Not worth chasing.
+      Dropping to a TTY is the guaranteed floor; headless boot removes it.
+  - slug: OQ-6
+    question: >-
+      Why does the KV cache delta differ between quants at 32k — 730 MiB for
+      Q4_K_M versus 630 MiB for Q8_0?
+    status: open
+    opened: 2026-08-18
+  - slug: OQ-7
+    question: What does Q4_K_M cost in QUALITY versus Q8_0?
+    status: open
+    opened: 2026-08-18
+  - slug: OQ-8
+    question: >-
+      Does unsloth's fused cross-entropy let the two OOM geometries pass by
+      never materializing the fp32 logits tensor?
+    status: open
+    opened: 2026-08-23
+  - slug: OQ-9
+    question: >-
+      Does synchronous=FULL measurably cost throughput at the batched write
+      volume this project produces?
+    status: open
+    opened: 2026-09-09

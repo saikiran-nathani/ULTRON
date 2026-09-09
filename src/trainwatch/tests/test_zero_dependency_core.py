@@ -38,6 +38,13 @@ CORE_MODULES = (
     "hub",
     "liveness",
     "security",
+    # ADR-0004 phase C. Both are reachable from `cli`, which is already listed,
+    # so they are core whether or not they are named -- naming them makes the
+    # constraint visible at the point someone would add an import. `progress`
+    # touches PyYAML, which is why it does so inside seed_from_yaml() rather
+    # than at module scope.
+    "curriculum",
+    "progress",
 )
 
 PROBE = """

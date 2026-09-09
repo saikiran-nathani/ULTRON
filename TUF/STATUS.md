@@ -1,267 +1,196 @@
-# STATUS — living state of the project
+# STATUS — generated from the progress database
 
-**Update this at the end of every session.** It is the first thing the next session reads.
+<!-- GENERATED FILE. Do not edit. -->
+<!-- Regenerate: trainwatch curriculum --write TUF/STATUS.md -->
 
-Last updated: **2026-08-18** · Updated by: TUF hardware session (08-17) + serving benchmark (08-18), merged on the Mac
+Generated **2026-09-09** from `var/trainwatch.db` (ADR-0004).
 
----
+Every status below is **derived from gate evidence**, not typed in. A phase is
+`done` only when every one of its gates has a passing result. An unmeasured gate
+reads as blocked, which is the behaviour the hand-written file lacked.
 
-## Where we actually are
+## Pipeline
 
-**Week 1–2. The sandbox is built and green. Nothing has trained, by design.**
+`sandbox ✅ → eval-harness 🚧 → baseline ⛔ → data 🚧 → sft ⛔ → rft ⛔ → dpo ⛔ → grpo ⛔ → self-repair ⛔ → merge ⛔ → serve 🚧`
 
-The pipeline gate we are standing on: `sandbox ✅ → eval harness (partial) → baseline (blocked)`.
+_No drift: every declared status matches its gate evidence._
 
-| Path | State |
-|---|---|
-| `CLAUDE.md` | Present. Amended this session: pip/venv not conda, concrete `HF_HOME`. |
-| `docs/` | 190-slide field guide + `OUTLINE.md` + `sections/*.js`. Unchanged. |
-| `TUF/` | This pack. **Amended this session — see "Corrections to the pack" below.** |
-| `src/sandbox/` | **Built.** `executor.py`, `_runner.py`, adversarial suite. **19/19 green.** |
-| `src/eval/` | **Partial.** `pass_at_k.py` + `extract.py` built and self-checking. `harness.py` blocked on the environment. |
-| `src/{data,train,serve}/` | Empty, structure committed |
-| `configs/` `results/` `checkpoints/` `data/` `notebooks/` | Created, empty, committed |
-| `requirements.txt` | **Written** — pip only, Python 3.14, verified against live indexes |
+## Phases
 
----
+### ✅ Phase 0 — Sandbox
 
-## TUF machine state — MEASURED, not assumed
+> Level 1: subprocess + setrlimit + setsid/killpg, dual wall/CPU timeouts, env allowlist, scoring from a report file rather than an exit code. Level 2 (containers) is still required before the first unattended run.
 
-Everything below was run on the hardware this session. ✅ = verified, ❌ = verified absent.
+| Gate | Result | When | Where | Evidence |
+|---|---|---|---|---|
+| `adversarial-suite` | pass | 2026-08-23 | tuf | 23/23 on the TUF, per results/01-doc-corrections.md. Note the count: BUILDING-ULTRON.md still says 19 in four places. |
+| `orphan-negative-control` | pass | 2026-08-17 | tuf | ORPHAN LEAK: pids [...] survived — negative control confirmed |
 
-| Item | Expected by the pack | Measured | ✓ |
-|---|---|---|---|
-| Ubuntu 26.04 | Yes | Ubuntu 26.04 LTS, kernel 7.0.0-29-generic | ✅ |
-| MOK enrolled, `nvidia-smi` works | RTX 3050, 4096 MiB | **RTX 3050 Laptop, 4096 MiB, driver 595.84** | ✅ |
-| Both GPUs on the bus | 3050 + Renoir iGPU | `01:00.0` GA107M + `06:00.0` Renoir | ✅ |
-| Display on the iGPU | `display_active: Disabled`, idle 5–20 MB | ⚠️ **`display_active: Enabled`, 79 MiB used** | ⚠️ |
-| CPU / RAM | 8c/16t, 16 GB | 16 threads, **14 Gi usable** (iGPU reserves ~2 GB) | ✅ |
-| Swap enlarged to 16 GB | 16 G | ❌ **4 G** (`/swap.img`), 1.5 G already in use | ❌ |
-| 1 TB ext4 at `/data` by UUID | ext4, owned by `$USER` | ✅ **ext4**, `UUID=7ad3c44b-7ce3-4493-bce6-1b9b0bc34976`, 916 G (907 G free), reformatted 2026-08-23 | ✅ |
-| `/data` exists | mounted | ✅ **mounted from `/dev/nvme0n1p1`**, `rw,noatime` | ✅ |
-| `HF_HOME=/data/hf` set before any download | `/data/hf` | ⏳ unblocked — `/data/hf` is now a real path on the 1 TB | ⏳ |
-| Python env | conda `ultron`, py3.11 | ❌ no conda. **Only `python3.14` exists**; no `pip` module | ❌ |
-| torch + CUDA → `(8, 6)` | Ampere sm_86 | ⏳ not installed yet | ⏳ |
-| `python -m bitsandbytes` | passes | ⏳ not installed yet | ⏳ |
-| `unsloth` imports | ok | ⏳ not installed yet | ⏳ |
-| Docker + `hello-world` | ~50 ms/container | ❌ **not installed** | ❌ |
-| llama.cpp CUDA build | `-ngl 99` offload, GGUF loads | ✅ **works** — 1.5B Q4_K_M at 116.4 tok/s, see serving benchmark | ✅ |
-| W&B authenticated | one metric logged | ⏳ not installed yet | ⏳ |
-| `tmux`, `nvtop`, `gcc`, `node` | present | ❌ **all missing** (minimal install) | ❌ |
-| Lid-close suspend disabled | `HandleLidSwitch=ignore` | ⏳ unverified | ⏳ |
-| SSH + `tuf.local` from the Mac | `ssh tuf` | ⏳ unverified | ⏳ |
-| flash-attn (optional) | — | ❌ not installed (optional, defer) | — |
-| `/data/baseline.txt` | captured | ⏳ blocked on `/data` | ⏳ |
+### 🚧 Phase 1 — Eval harness
 
-### Corrections to the pack — made this session
+> THE CURRENT BLOCKER, and it is pure Python — no GPU, no compiler, no sudo. Every number the rest of the pipeline claims is measured by this.
 
-1. 🛑 **The NVMe device names are reversed** from what `01-SETUP.md` Step 6 assumed.
-   `nvme1n1` is the **512 GB Samsung Ubuntu root**; `nvme0n1` is the **1 TB Crucial data
-   drive**. Step 6's `wipefs -a /dev/nvme1n1` **would have erased the OS.** The step is now
-   marked with a stop block and the command flagged do-not-run. *Always match on SIZE and
-   MODEL, never on device name.*
-2. ~~**`/data` resolves to a directory on the ext4 root**~~ — **superseded 2026-08-23.** The 1 TB
-   was reformatted to ext4 and is now a real mount at `/data`
-   (`UUID=7ad3c44b-7ce3-4493-bce6-1b9b0bc34976`, 916 G, 907 G free). The NTFS dirty bit made
-   the volume drop on every reboot; its contents were verified duplicated on the ext4 root
-   before the wipe. `HF_HOME=/data/hf` therefore lands on the 1 TB as originally designed,
-   and the root disk is no longer the constraint.
-3. **conda → pip/venv**, and **Python 3.11 → 3.14.** Ubuntu 26.04 ships *only* `python3.14`;
-   3.11/3.12/3.13 are not in the archive. Verified 3.14 is fine for the whole stack: torch
-   2.13 has cp314 wheels, `bitsandbytes` ships an ABI-agnostic `py3-none-manylinux` wheel,
-   `unsloth` declares `<3.15`.
-4. **`pip install torch`, not the cu128 index.** PyPI torch 2.13.0 pins `nvidia-cudnn-cu13`
-   — it *is* the CUDA 13 build and matches the 595.84 driver. The cu128 index only has
-   2.10.0 for cp314, i.e. the documented command installs an *older* torch here.
-5. **`RLIMIT_NPROC` counts threads, not processes.** This box: 175 processes but **2069
-   threads**. The field guide's example value of `nproc=64` makes *every* `fork()` fail with
-   `BlockingIOError` — which is worse than useless, because the fork-bomb test goes green
-   while proving nothing. `executor.py` now sizes it as measured-threads + headroom.
+| Gate | Result | When | Where | Evidence |
+|---|---|---|---|---|
+| `extract-verified` | pass | 2026-09-08 | mac | extract.py reviewed; the ordering bug where extract_code(truncate_at_stops(text)) decapitates a fenced block is fixed by clean_completion(). |
+| `harness-driver-exists` | — | — | — | — |
+| `pass-at-k-verified` | pass | 2026-09-08 | mac | Verified exhaustively over 22,960 (n,c,k) cases against exact combinatorics. The naive independence estimator errs by ~4 points. |
 
-### ⚠️ Open: 79 MiB of VRAM held at idle
+Not yet measured — each is a command, not an opinion:
 
-The pack predicts 5–20 MB with `display_active: Disabled`. We measure **79 MiB** with
-`display_active: Enabled`. That is 2% of the budget, not a blocker, but it means something
-is attached to the dGPU. Worth resolving before the first long run — check
-`glxinfo | grep 'OpenGL renderer'` names the **AMD Renoir** (needs `mesa-utils`), and close
-Chrome/PyCharm before training. Dropping to a TTY (Ctrl+Alt+F3) is the guaranteed floor.
+- `harness-driver-exists` → `python -m src.eval.harness --help`
 
-### ⚠️ RAM pressure is real right now
+### ⛔ Phase 2 — Baseline
 
-`8.8 Gi used / 14 Gi total`, only **5.7 Gi available**, with 1.5 G already swapped — and swap
-is 4 G, not the 16 G the runbook calls for. The pack is right that **16 GB system RAM bites
-before VRAM does**. Enlarge swap before the first dataset job.
+> Blocked on Phase 1. Three seeds, recorded with the harness commit SHA and the template name. Everything after this is "better than that number"; if the number is wrong every later claim is wrong.
 
----
+| Gate | Result | When | Where | Evidence |
+|---|---|---|---|---|
+| `baseline-recorded` | — | — | — | — |
 
-## Next actions, in order
+Not yet measured — each is a command, not an opinion:
 
-**Blocked on you — these need `sudo`, which this session does not have.** Paste with a
-leading `!` to run them in-session:
+- `baseline-recorded` → `test -f results/00-baseline.md`
 
-1. ☐ `sudo apt update && sudo apt install -y build-essential git curl wget htop tmux nvtop python3.14-venv python3-pip unzip pkg-config mesa-utils docker.io`
-2. ☐ `sudo usermod -aG docker $USER` — then **log out and back in**, and `docker run --rm hello-world`
-3. ☑ ~~`sudo mkdir -p /data && sudo chown …`~~ — **done 2026-08-23.** 1 TB reformatted to ext4, in `/etc/fstab` by UUID, mounted at `/data`.
-4. ☐ Swap 4 G → 16 G:
-   `sudo swapoff /swap.img && sudo fallocate -l 16G /swap.img && sudo chmod 600 /swap.img && sudo mkswap /swap.img && sudo swapon /swap.img`
-5. ☐ Disable lid-suspend — `01-SETUP.md` Step 5. Costs a night on a GRPO run if skipped.
+### 🚧 Phase 3 — Data curation
 
-**Then, unblocked:**
+> Partially built. Tokenizer and chat-template checks landed; download, dedup, decontaminate and synth do not exist yet. Runs on the Mac — 48 GB against the TUF's 14 GiB usable.
 
-6. ☐ `HF_HOME` into `~/.bashrc` **before any download** — `01-SETUP.md` Step 8
-7. ☐ `python3.14 -m venv ~/venvs/ultron && source ~/venvs/ultron/bin/activate && pip install torch`
-8. ☐ Confirm `torch.cuda.get_device_capability()` → `(8, 6)`, **then** `pip install -r requirements.txt`
-9. ☐ Smoke tests: `python -m bitsandbytes` · `from unsloth import FastLanguageModel` · `wandb.init()` + one metric
-10. ☐ Re-run the adversarial suite under the venv with pytest: `pytest src/sandbox/tests/ -v`
-11. ☐ Capture `/data/baseline.txt` — `01-SETUP.md` Step 12
-12. ☐ Write `src/eval/harness.py` around `evalplus`, wiring in the existing `pass_at_k` + `extract`
-13. ☐ Produce `results/00-baseline.md` — one command, one number, **three seeds**, with the
-    harness commit SHA, template name, and date
-14. ☐ Only then download a training dataset
+| Gate | Result | When | Where | Evidence |
+|---|---|---|---|---|
+| `decontaminated` | — | — | — | — |
+| `lengths-measured` | pass | 2026-08-22 | mac | src/data/measure_lengths.py, committed in 1183581 |
+| `template-verified` | pass | 2026-08-22 | mac | src/data/verify_template.py, committed in 1183581 |
 
-**Do not start SFT until 13 is done.** Everything after the baseline is "better than that
-number"; if the number is wrong, every later claim is wrong.
+Not yet measured — each is a command, not an opinion:
 
-### ~~Consider: move the working copy off NTFS~~ — resolved 2026-08-23
+- `decontaminated` → `python -m src.data.decontaminate --report`
 
-The canonical checkout is **`~/projects/ULTRON`** on the ext4 root. Three stale duplicates
-(`~/Documents/projects/ULTRON`, `~/Storage/projects/ULTRON`, `~/ULTRON-rescue`) were all at
-`ca4143c`, confirmed contained in `origin/master`, and removed. The NTFS copy's `.git/index`
-was unreadable (`index file open failed: Invalid argument`) — filesystem damage, and the
-reason its stale `origin/master` ref made an already-pushed commit look unpushed.
+### ⛔ Phase 4 — SFT
 
----
+> Geometry is settled by measurement: seq_len 1024, batch 1, grad_accum 16. NOT 1024x2x8 — that OOMs. The binding constraint is the fp32 logits tensor (vocab 151,936 x tokens_per_forward x 4 B), not model size.
 
-## Results log
+| Gate | Result | When | Where | Evidence |
+|---|---|---|---|---|
+| `loss-masking-verified` | — | — | — | — |
+| `sft-beats-baseline` | — | — | — | — |
 
-Nothing measured on a model yet. No model has been loaded, let alone trained.
+Not yet measured — each is a command, not an opinion:
 
-| Phase | Config | Data version | HumanEval+ pass@1 | Seeds | Date | Notes |
-|---|---|---|---|---|---|---|
-| — | — | — | — | — | — | No runs yet |
+- `loss-masking-verified` → `python -m src.train.sft --dry-run --show-labels`
+- `sft-beats-baseline` → `python -m src.eval.harness --checkpoint <path> --seeds 3`
 
-### Sandbox verification — the one thing that *is* measured
+### ⛔ Phase 5 — RFT
 
-`python3.14 src/sandbox/tests/test_adversarial.py` → **19/19 pass** on 2026-08-17,
-Python 3.14.4. All 12 cases from the trap index, plus 7 added.
+| Gate | Result | When | Where | Evidence |
+|---|---|---|---|---|
+| `teacher-generation` | — | — | — | — |
 
-| Case | Result |
-|---|---|
-| Infinite loop → timeout | ✅ killed in 2.1 s (CPU limit fires before wall clock) |
-| `time.sleep(999)` → timeout | ✅ 4.0 s — wall clock catches what RLIMIT_CPU misses |
-| Fork bomb → contained | ✅ and the host still runs a trivial job afterwards |
-| Memory bomb → `MemoryError` | ✅ contained by `RLIMIT_AS`, host unaffected |
-| **Orphan subprocess → `killpg`** | ✅ **and negative-control verified** (see below) |
-| `sys.exit(0)` → not a pass | ✅ scored `error`; exit code really is 0 |
-| Swallow-everything → still fails | ✅ incl. a solution raising `SystemExit` inside a test |
-| Read the test file | ✅ all 5 candidate paths `FileNotFoundError`, attempt flagged |
-| Network egress | ✅ flagged `net_attempt` (L1 detects; L2 prevents) |
-| Filesystem escape | ✅ flagged — and confirmed L1 genuinely cannot *block* it |
-| Disk fill → `RLIMIT_FSIZE` | ✅ capped |
-| Env leak → `None` | ✅ `HF_TOKEN`, `WANDB_API_KEY`, `SSH_AUTH_SOCK`, `PYTHONPATH` all absent |
-| Syntax error → fail fast | ✅ 0 ms, no process spawned |
+Not yet measured — each is a command, not an opinion:
 
-**Two findings worth keeping:**
+- `teacher-generation` → `python -m src.teacher.generate --count 10000`
 
-- **The orphan test is real, not decorative.** Negative control: replacing `killpg` with a
-  plain `proc.kill()` (exactly how `subprocess.run(timeout=)` is broken) makes the test fail
-  with `ORPHAN LEAK: pids [...] survived`. The pack's claim that this is the case that
-  silently passes on hand-rolled sandboxes is correct.
-- **A broken group-kill does not just leak — it deadlocks the harness.** The orphan inherits
-  our stdout/stderr pipes, so the write end never closes, EOF never arrives, and an
-  unbounded `communicate()` after the kill hangs *forever*. A solution can trigger this
-  deliberately by calling `os.setsid()` to leave the group that `killpg` targets. Fixed with
-  a bounded drain that abandons the pipes and sets a `group_escape` flag; case 05b covers it.
-  **This is the mechanism behind "run hangs at a random step" in the trap index.**
+### ⛔ Phase 6 — DPO
 
-**Known Level 1 residuals — these are why Level 2 is mandatory before the first unattended run:**
+> Preference pairs come free from execution results — passed vs failed.
 
-| Residual | Why L1 cannot fix it | L2 fix |
-|---|---|---|
-| Filesystem escape *writes* succeed | same uid as you | `--read-only` + `--tmpfs /work` |
-| Network is flagged, not blocked | no way to drop sockets in-process | `--network none` |
-| `os.setsid()` escapes `killpg` | the child can leave the group | container teardown |
-| `RLIMIT_NPROC` is per-UID | coupled to your desktop's own threads | `--pids-limit` (per container) |
-| Audit-hook flags are tamperable | `sys.modules['__main__']` is reachable | flags are evidence, not enforcement |
+| Gate | Result | When | Where | Evidence |
+|---|---|---|---|---|
+| `pairs-built` | — | — | — | — |
 
-### Serving benchmark — MEASURED on the TUF, 2026-08-18
+Not yet measured — each is a command, not an opinion:
 
-**Model: Qwen2.5-Coder-1.5B** — inferred from the artifact sizes (986 MB / 1.6 GB match 1.5B, not
-0.5B). As of 2026-08-18 this is the **ship target**; 0.5B remains the dev-loop model. These numbers
-describe the shipped artifact, not the iteration model — do not file them under 0.5B.
+- `pairs-built` → `python -m src.data.pairs --from-runs`
 
-llama.cpp / GGUF, `-ngl 99`.
+### ⛔ Phase 7 — GRPO
 
-| Metric | Q4_K_M (986 MB) | Q8_0 (1.6 GB) | Q4 advantage |
-|---|---|---|---|
-| Decode, short prompt | **116.4 tok/s** | 91.2 tok/s | **+27.6%** |
-| Decode, 5k prompt | 108.8 | 86.6 | +25.6% |
-| Decode, 20k prompt | 84.5 | 70.3 | +20.2% |
-| Prefill, 5k prompt | 4,326 tok/s | 4,496 tok/s | −3.9% |
-| Prefill, 20k prompt | 2,934 | 2,949 | −0.5% (tie) |
-| VRAM loaded | **1,394 MiB** | 2,024 MiB | **−630 MiB** |
-| VRAM @ 32K context | **2,124 MiB** | 2,654 MiB | −530 MiB |
-| CPU-only decode | 24.8 tok/s | 16.0 tok/s | **+55%** |
+> Needs ExecResult.fraction as a dense reward, and the reward-hacking gallery as a live defence. 4 GB headroom here assumes unsloth even at 0.5B, which is not yet measured.
 
-**Derived — effective memory bandwidth**
+| Gate | Result | When | Where | Evidence |
+|---|---|---|---|---|
+| `reward-hacking-guarded` | — | — | — | — |
 
-| Format | Bytes/token × tok/s | Effective BW | % of ~192 GB/s peak |
-|---|---|---|---|
-| Q4_K_M | 986 MB × 116.4 | ~115 GB/s | 60% |
-| Q8_0 | 1,600 MB × 91.2 | ~146 GB/s | **76%** |
+Not yet measured — each is a command, not an opinion:
 
-CPU-only lands at ~25 GB/s for both — roughly half of dual-channel DDR4-3200's ~51 GB/s theoretical.
-The two agreeing within 5% is a good signal the measurements are clean.
-**GPU speedup over CPU: 4.7× (Q4), 5.7× (Q8)** — modest, because this is a bandwidth-bound workload
-on a bandwidth-modest card.
+- `reward-hacking-guarded` → `python -m pytest src/sandbox/tests/test_adversarial.py -k hacking`
 
-**Conclusions**
+### ⛔ Phase 8 — Self-repair
 
-- **Ship Q4_K_M.** Faster decode, 630 MiB less VRAM, 55% faster CPU fallback. It loses prefill by an
-  amount inside run-to-run noise. There is no axis where Q8_0's extra 630 MB buys anything measurable.
-- **Decode is bandwidth-bound; prefill is compute-bound.** Quantization only helps decode. Q8_0's
-  marginal prefill win is Q4_K's dequantization overhead showing up where weights are reused across
-  many tokens.
-- **Q8_0 is nearly bandwidth-saturated (76% of peak). Q4_K_M gives up ~16% of peak to dequant cost**
-  — which is why the speedup is 1.28× rather than the 1.62× the file-size ratio predicts.
-- **Quality was NOT measured.** These are speed and footprint only. See open question 5.
+| Gate | Result | When | Where | Evidence |
+|---|---|---|---|---|
+| `traceback-to-fix` | — | — | — | — |
+
+Not yet measured — each is a command, not an opinion:
+
+- `traceback-to-fix` → `python -m src.eval.harness --repair-rounds 1`
+
+### ⛔ Phase 9 — Merge and quantize
+
+| Gate | Result | When | Where | Evidence |
+|---|---|---|---|---|
+| `gguf-exported` | — | — | — | — |
+
+Not yet measured — each is a command, not an opinion:
+
+- `gguf-exported` → `ls -la /data/models/*.gguf`
+
+### 🚧 Phase 10 — Serve
+
+> Measured ahead of the training phases because the benchmark runs against stock models. Ship target reproduces: 115.0 tok/s vs 116.4 in August.
+
+| Gate | Result | When | Where | Evidence |
+|---|---|---|---|---|
+| `quant-quality-measured` | — | — | — | — |
+| `serving-measured` | pass | 2026-08-23 | tuf | results/serving-tuf.json. 1.5B Q4_K_M at 1,297 MiB / 115.0 tok/s, full offload to 32k. 3B is a 16k model — at 32k it partially offloads to 0.814 and collapses to 10.6 tok/s on a 20k prompt, with no error. |
+
+Not yet measured — each is a command, not an opinion:
+
+- `quant-quality-measured` → `python -m src.eval.harness --served qwen2.5-coder:1.5b --seeds 3`
+
+## Decisions in force
+
+- **D-store-is-record** — The store is the system of record (ADR-0004)  ·  _2026-09-09_
+  <br>Fires ADR-0002's trip-wire. Brings backups, migrations and app-level auth inside the tailnet. See docs/adr/0004-progress-system-of-record.md.
+- **D-teacher-32b** — Teacher is Qwen2.5-Coder-32B 4-bit via ollama on the Mac  ·  _2026-09-08_
+  <br>Measured 83.3% pass@1 at ~7.5 s/generation. Supersedes slides 8, 25, 61. A 9B reasoning model scored 33.3% only because it returns an empty `response` with the chain of thought in a separate `thinking` field — corrected to 76.7% vs 83.3%, not significant at n=60.
+- **D-ship-q4km** — Ship Q4_K_M, not Q8_0  ·  _2026-08-23_
+  <br>Q8_0 costs 23% of decode (115.0 -> 89.0 tok/s) for 630 MiB and buys nothing measurable. Prefill rises slightly at Q8, which is the expected shape: prefill is compute-bound and dequantizing Q4 is overhead.
+- **D-python-3.12** — uv + Python 3.12, venv at the repo root  ·  _2026-08-22_
+  <br>Verified by building it: torch 2.11.0+cu128, transformers 4.57.6, trl 0.24.0, peft 0.20.0, bitsandbytes 0.50.1, unsloth 2026.8.19.
+- **D-student-0.5b** — 0.5B for the dev loop, 1.5B as the ship target  ·  _2026-08-17_
+  <br>Build at 0.5B for loop speed (20-40 min per SFT run); re-run the settled recipe at 1.5B once. Do not iterate at 1.5B — SFT there is 2-3 hours.
+- **D-owned-hardware** — No rented GPUs or cloud compute  ·  _2026-08-17_
+  <br>The point is to acquire the skills on hardware that is owned. Plan around 4 GB. This also rules out managed databases.
+- **D-bf16-only** — bf16 always, never fp16  ·  _2026-08-17_
+  <br>Ampere (sm_86) supports bf16 natively. fp16 NaNs on step 1 on this card.
+- **D-qlora-only** — QLoRA only, never full fine-tuning  ·  _2026-08-17_
+  <br>4 GB VRAM. Not a preference — full fine-tuning does not fit.
+
+### Superseded — kept on purpose
+
+The useful record is not the current value but the chain that reached it.
+
+- ~~**D-teacher-14b** — Teacher is a 14B quantized model on the Mac~~ → superseded by **D-teacher-32b**
+- ~~**D-python-3.14** — Python 3.14, the only interpreter Ubuntu 26.04 ships~~ → superseded by **D-python-3.12**
+
+## Open questions
+
+- **OQ-1** — Is the TUF's Wi-Fi genuinely dead, or disabled in BIOS?  ·  _opened 2026-08-17_
+- **OQ-6** — Why does the KV cache delta differ between quants at 32k — 730 MiB for Q4_K_M versus 630 MiB for Q8_0?  ·  _opened 2026-08-18_
+- **OQ-7** — What does Q4_K_M cost in QUALITY versus Q8_0?  ·  _opened 2026-08-18_
+- **OQ-8** — Does unsloth's fused cross-entropy let the two OOM geometries pass by never materializing the fp32 logits tensor?  ·  _opened 2026-08-23_
+- **OQ-9** — Does synchronous=FULL measurably cost throughput at the batched write volume this project produces?  ·  _opened 2026-09-09_
+
+### Closed
+
+- **OQ-2** — Did the 1 TB get reformatted to ext4, or is it still NTFS?
+  <br>✅ ext4, 916 G at /data, by UUID in /etc/fstab with nofail. The NTFS dirty bit dropped the volume on every reboot. HF_HOME=/data/hf now lands on the 1 TB as designed.  ·  _2026-08-23_
+- **OQ-3** — What is the real measured VRAM headroom versus the estimated tables?
+  <br>✅ 3,770 MiB usable, not 4,096 — the display reserves the rest. Every headroom sum written against 4,096 is ~326 MiB too generous.  ·  _2026-08-23_
+- **OQ-4** — Why is display_active Enabled, holding VRAM at idle?
+  <br>✅ 47 MiB at idle, better than the 79 MiB first recorded. Not worth chasing. Dropping to a TTY is the guaranteed floor; headless boot removes it.  ·  _2026-08-23_
 
 ---
 
-## Open questions / blockers
-
-| # | Question | Status |
-|---|---|---|
-| 1 | Is the TUF's Wi-Fi genuinely dead, or disabled in BIOS? | **Open, not a blocker.** Not re-triaged this session; Ethernet is up and network works (PyPI reachable). |
-| 2 | Did the 1 TB get reformatted to ext4, or is it still NTFS? | ✅ **CLOSED — reformatted to ext4 on 2026-08-23.** Reopened after the NTFS dirty bit dropped the volume on every reboot. 916 G at `/data`, by UUID in `/etc/fstab`. `HF_HOME=/data/hf` now lands on the 1 TB. |
-| 3 | Real measured VRAM headroom vs the estimated tables | **Partially closed.** 4096 MiB total, **79 MiB held at idle** vs 5–20 MB predicted. Full reconciliation needs torch installed. |
-| 4 | Why is `display_active: Enabled`? | **New.** 79 MiB on the dGPU. Check `glxinfo` names AMD Renoir. |
-| 5 | Move the repo off NTFS to ext4? | ✅ **CLOSED 2026-08-23.** Canonical checkout is `~/projects/ULTRON` on ext4; the NTFS copy and two other stale duplicates are gone. |
-| 6 | KV cache delta differs between quants: 730 MiB (Q4_K_M) vs 630 MiB (Q8_0) at 32K | **Open — anomaly.** KV cache is a function of architecture and context, not weight quantization. These deltas should match. Re-run with identical `--cache-type-k/v` and context flags before trusting either figure. |
-| 7 | Quality of Q4_K_M vs Q8_0 — unmeasured | **Open.** Speed says ship Q4_K_M; nothing yet confirms the quality cost is inside noise. Run `harness.py` against the served endpoint, both quants, three seeds. This is the "eval the checkpoint, ship the quant" trap. |
-
----
-
-## Decisions already made — do not relitigate
-
-- **QLoRA only.** No full fine-tuning.
-- **bf16 only.** Never fp16 on this card.
-- **No rented GPUs / cloud compute.** Learning on owned hardware. Plan around 4 GB.
-- **Qwen2.5-Coder-0.5B is the target.** 1.5B is the stretch, 7B+ is out of scope for training here.
-- **The Mac owns data and eval. The TUF owns training.**
-- **Pipeline order is fixed** and not up for discussion.
-- **pip + venv, not conda.** Decided 2026-08-17. Python 3.14, the only interpreter Ubuntu 26.04 ships.
-
----
-
-## How to update this file
-
-At the end of a session, edit in place:
-
-1. Bump the "Last updated" line and say which machine you were on
-2. Tick verified boxes; add anything newly discovered about the hardware
-3. Move completed items out of "Next actions" and add the next ones
-4. Add any measured number to the results log **with its config and seeds**
-5. Add blockers as you hit them; close them as you resolve them
-
-> A results file with only successes is a marketing document. **Write down what failed.**
+> A results file with only successes is a marketing document.
+> **Write down what failed.**

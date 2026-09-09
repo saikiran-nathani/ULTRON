@@ -7,6 +7,7 @@ import logging
 import math
 import os
 import pathlib
+import platform
 import random
 import shutil
 import subprocess
@@ -18,10 +19,12 @@ from typing import Any
 from . import __version__, backup
 from .client import HubClient, HubError, os_clipboard_read, os_clipboard_write
 from .config import Config, load_config
+from .curriculum import Curriculum
 from .gpu import nvidia_smi_available, sample_gpus
 from .heartbeat import read_heartbeat
 from .liveness import check_liveness
 from .notify import Notifier
+from .progress import render_status, seed_from_yaml
 from .store import Store
 
 # ── tiny ANSI helpers (no dependency on rich/colorama) ───────────────────
@@ -130,6 +133,77 @@ def cmd_prune(args: argparse.Namespace, cfg: Config) -> int:
     print(f"pruned {deleted} rows older than {args.days} days")
     print(dim(f"  {_bytes(before)} → {_bytes(after)}"))
     return 0
+
+
+def _git_sha() -> str:
+    """Short HEAD sha, or empty. Evidence is worth much less undated and unpinned."""
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],  # noqa: S607 - PATH lookup is fine here
+            capture_output=True, text=True, timeout=5, check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return out.stdout.strip() if out.returncode == 0 else ""
+
+
+def cmd_curriculum(args: argparse.Namespace, cfg: Config) -> int:
+    """Seed, inspect, record and render curriculum progress. ADR-0004 phase C.
+
+    Replaces hand-editing `TUF/STATUS.md`. Statuses are derived from gate
+    evidence, so the way to change one is to record a result.
+    """
+    with Curriculum(cfg.db_path) as cur:
+        if args.seed:
+            counts = seed_from_yaml(args.seed, cur)
+            print("seeded " + "  ".join(f"{k}={v}" for k, v in counts.items()))
+            return 0
+
+        if args.record:
+            try:
+                phase_slug, gate_slug = args.record.split("/", 1)
+            except ValueError:
+                print(red("--pass/--fail take PHASE/GATE, e.g. sandbox/adversarial-suite"))
+                return 2
+            try:
+                cur.record_gate(
+                    phase_slug, gate_slug,
+                    passed=args.passed,
+                    evidence=args.evidence,
+                    machine=args.machine or platform.node(),
+                    commit_sha=_git_sha(),
+                )
+            except KeyError as exc:
+                print(red(str(exc)))
+                return 2
+            verb = green("pass") if args.passed else red("FAIL")
+            print(f"recorded {verb}  {phase_slug}/{gate_slug}")
+            return 0
+
+        drifted = cur.drift()
+        if args.drift:
+            # Exit non-zero so this can gate CI: a record that has run ahead of
+            # its evidence should fail a build, not print a warning nobody sees.
+            if not drifted:
+                print(green("no drift"))
+                return 0
+            for item in drifted:
+                how = red("overclaimed") if item.overclaimed else dim("understated")
+                print(f"  {item.slug}: declared {item.declared}, evidence says "
+                      f"{item.derived}  [{how}]")
+            return 1
+
+        text = render_status(cur)
+        if args.write:
+            out = pathlib.Path(args.write)
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_text(text)
+            print(f"wrote {cyan(str(out))}  ({len(text.splitlines())} lines)")
+            if drifted:
+                print(red(f"  {len(drifted)} phase(s) drifting — see the file"))
+        else:
+            print(text)
+        return 0
 
 
 def cmd_backup(args: argparse.Namespace, cfg: Config) -> int:
@@ -854,6 +928,18 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--off", action="store_true", help="stop serving")
     s.set_defaults(func=cmd_share)
 
+    s = sub.add_parser("curriculum", help="curriculum progress: seed, record, render")
+    s.add_argument("--seed", metavar="YAML", default="", help="load declarations from YAML")
+    s.add_argument("--write", metavar="PATH", default="", help="render Markdown to a file")
+    s.add_argument("--drift", action="store_true",
+                   help="exit 1 if any declared status outruns its evidence")
+    g = s.add_mutually_exclusive_group()
+    g.add_argument("--pass", dest="record_pass", metavar="PHASE/GATE", default="")
+    g.add_argument("--fail", dest="record_fail", metavar="PHASE/GATE", default="")
+    s.add_argument("--evidence", default="", help="what proves it; a path or a number")
+    s.add_argument("--machine", default="", help="defaults to this host's name")
+    s.set_defaults(func=cmd_curriculum)
+
     s = sub.add_parser("backup", help="snapshot / verify / restore the database")
     s.add_argument("--list", action="store_true", help="list snapshots with integrity")
     s.add_argument("--verify", metavar="PATH", default="", help="integrity_check one file")
@@ -880,6 +966,11 @@ def main(argv: list[str] | None = None) -> int:
         datefmt="%H:%M:%S",
     )
     cfg = load_config(args.env)
+    # --pass/--fail are one action with a boolean outcome; argparse cannot
+    # express that directly, so collapse them here rather than in the command.
+    if hasattr(args, "record_pass"):
+        args.record = args.record_pass or args.record_fail
+        args.passed = bool(args.record_pass)
     func: Any = args.func
     try:
         return int(func(args, cfg))

@@ -73,6 +73,72 @@ RunRow = dict[str, Any]
 log = logging.getLogger("trainwatch.store")
 
 
+def connect(path: str | Path) -> sqlite3.Connection:
+    """Open the system-of-record database with the pragmas ADR-0004 requires.
+
+    One factory because there are three openers -- Store, Hub and Curriculum --
+    all pointed at the same file by `cfg.db_path`. They previously each carried
+    their own copy of this block, which is precisely how `foreign_keys` came to
+    be set in neither: a pragma added in one place is invisible to the others.
+
+    Migrations run here too, so the schema is at head no matter which class
+    opened the file first.
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    db = sqlite3.connect(path, timeout=15.0, check_same_thread=False)
+    db.row_factory = sqlite3.Row
+    # WAL: readers never block the writer, which is what lets the dashboard
+    # poll a database the training loop is actively writing to.
+    db.execute("PRAGMA journal_mode=WAL")
+    # FULL, not NORMAL: ADR-0004 made this file the system of record. Under
+    # WAL, NORMAL can lose the last committed transactions on power loss -- it
+    # will not corrupt the file, but "committed" stops meaning committed. The
+    # fsync amortises over a batched flush rather than landing per metric.
+    db.execute("PRAGMA synchronous=FULL")
+    # Off by default in SQLite, and scoped to the connection. Without it every
+    # foreign key below is silently unenforced and nothing raises.
+    db.execute("PRAGMA foreign_keys=ON")
+    db.execute("PRAGMA busy_timeout=15000")
+    return db
+
+
+def _table_exists(db: sqlite3.Connection, name: str) -> bool:
+    row = db.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)
+    ).fetchone()
+    return row is not None
+
+
+def migrate(db: sqlite3.Connection) -> int:
+    """Apply pending migrations, tracked in `PRAGMA user_version`. Returns head.
+
+    ADR-0004 specified Alembic. It is not used, and the reason is worth
+    recording: Alembic earns its keep through `--autogenerate`, which diffs
+    SQLAlchemy models against the live schema. The same ADR rules out an ORM,
+    so there are no models to diff and Alembic reduces to ordered hand-written
+    SQL plus a dependency and an `env.py`. `user_version` is SQLite's own
+    answer to the same question and costs neither.
+
+    Each step must be safe to re-run and must tolerate a database where its
+    target tables do not exist yet -- any of the three openers may reach a
+    fresh file first. A step that raises leaves `user_version` unbumped and is
+    retried on the next open, so idempotence is the only guarantee available.
+    """
+    version = int(db.execute("PRAGMA user_version").fetchone()[0])
+    for target, name, apply in _MIGRATIONS:
+        if version >= target:
+            continue
+        log.info("migrating store to v%d (%s)", target, name)
+        apply(db)
+        # PRAGMA does not accept bound parameters. `target` is an int from the
+        # module-level tuple below, never from input.
+        db.execute(f"PRAGMA user_version = {int(target)}")
+        db.commit()
+        version = target
+    return version
+
+
 def _m001_metrics_unique(db: sqlite3.Connection) -> None:
     """Unique (run_id, key, step) so a replayed spool is idempotent.
 
@@ -84,6 +150,8 @@ def _m001_metrics_unique(db: sqlite3.Connection) -> None:
     and `CREATE UNIQUE INDEX` fails outright on those -- so dedupe first,
     keeping the newest row per key.
     """
+    if not _table_exists(db, "metrics"):
+        return  # Hub or Curriculum reached a fresh file first; Store creates it
     db.execute(
         """DELETE FROM metrics WHERE rowid NOT IN (
                SELECT MAX(rowid) FROM metrics GROUP BY run_id, key, step)"""
@@ -98,10 +166,91 @@ def _m001_metrics_unique(db: sqlite3.Connection) -> None:
     db.execute("DROP INDEX IF EXISTS idx_metrics_lookup")
 
 
+def _m002_curriculum(db: sqlite3.Connection) -> None:
+    """Curriculum progress tables — ADR-0004.
+
+    Replaces `TUF/STATUS.md`, which was hand-maintained, partially updated, and
+    by the time anyone noticed was asserting a reversed Python version and
+    "nothing measured yet" against two committed benchmark sweeps.
+
+    The constraints are the point. A document cannot refuse to contradict
+    itself; a schema can:
+
+    - `phases.ord UNIQUE` makes CLAUDE.md's "do not reorder" enforceable rather
+      than advisory.
+    - `status` CHECKs make an unknown state unrepresentable instead of a typo
+      that reads fine.
+    - `open_questions` CHECK ties `closed_at` to `status`, so a question cannot
+      be closed without recording when -- the exact shape of rot that made the
+      old file untrustworthy.
+    - `gates.verify_cmd` carries the command that proves the gate, so a result
+      is evidence rather than an assertion.
+
+    New tables live only here, never in SCHEMA. Two declarations of the same
+    table drift, and the copy that loses is the one nobody reads.
+    """
+    db.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS phases (
+            id     INTEGER PRIMARY KEY,
+            slug   TEXT NOT NULL UNIQUE,
+            name   TEXT NOT NULL,
+            ord    INTEGER NOT NULL UNIQUE,
+            status TEXT NOT NULL DEFAULT 'blocked'
+                       CHECK (status IN ('blocked', 'active', 'done')),
+            note   TEXT NOT NULL DEFAULT ''
+        );
+
+        CREATE TABLE IF NOT EXISTS gates (
+            id          INTEGER PRIMARY KEY,
+            phase_id    INTEGER NOT NULL REFERENCES phases (id) ON DELETE CASCADE,
+            slug        TEXT NOT NULL,
+            description TEXT NOT NULL,
+            verify_cmd  TEXT NOT NULL DEFAULT '',
+            UNIQUE (phase_id, slug)
+        );
+
+        CREATE TABLE IF NOT EXISTS gate_results (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            gate_id    INTEGER NOT NULL REFERENCES gates (id) ON DELETE CASCADE,
+            ts         REAL NOT NULL,
+            passed     INTEGER NOT NULL CHECK (passed IN (0, 1)),
+            evidence   TEXT NOT NULL DEFAULT '',
+            commit_sha TEXT NOT NULL DEFAULT '',
+            machine    TEXT NOT NULL DEFAULT ''
+        );
+        CREATE INDEX IF NOT EXISTS idx_gate_results ON gate_results (gate_id, ts DESC);
+
+        CREATE TABLE IF NOT EXISTS decisions (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            slug          TEXT NOT NULL,
+            title         TEXT NOT NULL,
+            body          TEXT NOT NULL DEFAULT '',
+            decided_at    REAL NOT NULL,
+            superseded_by INTEGER REFERENCES decisions (id) ON DELETE SET NULL,
+            UNIQUE (slug, decided_at)
+        );
+
+        CREATE TABLE IF NOT EXISTS open_questions (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            slug       TEXT NOT NULL UNIQUE,
+            question   TEXT NOT NULL,
+            status     TEXT NOT NULL DEFAULT 'open'
+                           CHECK (status IN ('open', 'closed')),
+            opened_at  REAL NOT NULL,
+            closed_at  REAL,
+            resolution TEXT NOT NULL DEFAULT '',
+            CHECK ((status = 'closed') = (closed_at IS NOT NULL))
+        );
+        """
+    )
+
+
 # (user_version, name, apply). Append only; never renumber or edit a shipped
 # entry -- a database in the wild has already recorded that it ran.
 _MIGRATIONS: tuple[tuple[int, str, Callable[[sqlite3.Connection], None]], ...] = (
     (1, "metrics unique index", _m001_metrics_unique),
+    (2, "curriculum progress tables", _m002_curriculum),
 )
 
 
@@ -123,62 +272,16 @@ class Store:
         batch_rows: int = _BATCH_ROWS,
     ) -> None:
         self.path = Path(path)
-        self.path.parent.mkdir(parents=True, exist_ok=True)
         self.flush_interval = flush_interval
         self.batch_rows = batch_rows
 
-        self._db = sqlite3.connect(self.path, timeout=15.0, check_same_thread=False)
-        self._db.row_factory = sqlite3.Row
-        # WAL: readers never block the writer, which is what lets the dashboard
-        # poll a database the training loop is actively writing to.
-        self._db.execute("PRAGMA journal_mode=WAL")
-        # FULL, not NORMAL: ADR-0004 made this file the system of record. Under
-        # WAL, NORMAL can lose the last committed transactions on power loss --
-        # it will not corrupt the file, but "committed" stops meaning committed.
-        # The fsync amortises over batch_rows, so the cost lands once per flush
-        # rather than once per metric.
-        self._db.execute("PRAGMA synchronous=FULL")
-        # Off by default in SQLite, and scoped to the connection. StorePool
-        # builds one Store per thread, so this __init__ *is* the per-connection
-        # factory. Without it every foreign key in the ADR-0004 schema is
-        # silently unenforced -- orphaned rows accumulate and nothing raises.
-        self._db.execute("PRAGMA foreign_keys=ON")
-        self._db.execute("PRAGMA busy_timeout=15000")
+        self._db = connect(self.path)
         self._db.executescript(SCHEMA)
-        self._migrate()
+        migrate(self._db)
         self._db.commit()
 
         self._buf: list[tuple[str, int, float, str, float]] = []
         self._last_flush = time.time()
-
-    # ── migrations ───────────────────────────────────────────────────────
-
-    def _migrate(self) -> None:
-        """Apply pending migrations, tracked in `PRAGMA user_version`.
-
-        ADR-0004 specified Alembic. It is not used, and the reason is worth
-        recording: Alembic earns its keep through `--autogenerate`, which
-        diffs SQLAlchemy models against the live schema. The same ADR rules out
-        an ORM, so there are no models to diff and Alembic reduces to ordered
-        hand-written SQL plus a dependency and an `env.py`. `user_version` is
-        SQLite's own answer to the same problem and costs neither.
-
-        Each step is written to be safe to re-run, because a step that raises
-        leaves `user_version` unbumped and will be retried on the next open.
-        DDL in Python's sqlite3 does not reliably participate in a transaction,
-        so idempotence is the guarantee we can actually rely on.
-        """
-        version = int(self._db.execute("PRAGMA user_version").fetchone()[0])
-        for target, name, apply in _MIGRATIONS:
-            if version >= target:
-                continue
-            log.info("migrating store to v%d (%s)", target, name)
-            apply(self._db)
-            # PRAGMA does not accept bound parameters. `target` is an int from
-            # the module-level tuple below, never from input.
-            self._db.execute(f"PRAGMA user_version = {int(target)}")
-            self._db.commit()
-            version = target
 
     # ── lifecycle ────────────────────────────────────────────────────────
 
