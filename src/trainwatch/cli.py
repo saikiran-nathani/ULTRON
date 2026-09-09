@@ -6,6 +6,7 @@ import argparse
 import logging
 import math
 import os
+import pathlib
 import random
 import shutil
 import subprocess
@@ -14,7 +15,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from . import __version__
+from . import __version__, backup
 from .client import HubClient, HubError, os_clipboard_read, os_clipboard_write
 from .config import Config, load_config
 from .gpu import nvidia_smi_available, sample_gpus
@@ -129,6 +130,63 @@ def cmd_prune(args: argparse.Namespace, cfg: Config) -> int:
     print(f"pruned {deleted} rows older than {args.days} days")
     print(dim(f"  {_bytes(before)} → {_bytes(after)}"))
     return 0
+
+
+def cmd_backup(args: argparse.Namespace, cfg: Config) -> int:
+    """Snapshot, verify, list or restore the system-of-record database.
+
+    ADR-0004 C13. `snapshot` is the scheduled path; `--restore` is the one you
+    run at 2am, so it prints exactly what it did and never deletes anything.
+    """
+    snap_dir = cfg.db_path.parent / "snapshots"
+
+    if args.list:
+        found = sorted(snap_dir.glob(backup.SNAP_GLOB), reverse=True)
+        if not found:
+            print(dim(f"no snapshots in {snap_dir}"))
+            return 0
+        for path in found:
+            verdict = backup.integrity(path)
+            mark = green("ok") if verdict == "ok" else red(verdict)
+            print(f"  {path.name}  {_bytes(path.stat().st_size):>10}  {mark}")
+        return 0
+
+    if args.verify:
+        target = pathlib.Path(args.verify)
+        verdict = backup.integrity(target)
+        print(f"{target}: {green('ok') if verdict == 'ok' else red(verdict)}")
+        return 0 if verdict == "ok" else 1
+
+    if args.restore:
+        src: pathlib.Path | None = (
+            pathlib.Path(args.restore) if args.restore != "latest" else backup.latest(snap_dir)
+        )
+        if src is None:
+            print(red(f"no snapshots in {snap_dir} to restore from"))
+            return 2
+        try:
+            aside = backup.restore(src, cfg.db_path)
+        except ValueError as exc:
+            print(red(str(exc)))
+            return 1
+        print(f"restored {cyan(src.name)} → {cfg.db_path}")
+        print(dim(f"  previous file kept at {aside.name} — delete it once you are happy"))
+        print(dim("  restart `trainwatch serve`: it holds an open handle to the old file"))
+        return 0
+
+    # default: take one
+    try:
+        snap = backup.snapshot(cfg.db_path, snap_dir)
+    except FileExistsError as exc:
+        print(dim(f"a snapshot for this second already exists: {exc}"))
+        return 0
+    verdict = backup.integrity(snap)
+    print(f"snapshot {cyan(snap.name)}  {_bytes(snap.stat().st_size)}  "
+          f"{green('ok') if verdict == 'ok' else red(verdict)}")
+    dropped = backup.prune_snapshots(snap_dir, hourly=args.hourly, daily=args.daily)
+    if dropped:
+        print(dim(f"  pruned {len(dropped)} old snapshot(s)"))
+    return 0 if verdict == "ok" else 1
 
 
 def cmd_tensorboard(args: argparse.Namespace, cfg: Config) -> int:
@@ -795,6 +853,17 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--port", type=int, default=None)
     s.add_argument("--off", action="store_true", help="stop serving")
     s.set_defaults(func=cmd_share)
+
+    s = sub.add_parser("backup", help="snapshot / verify / restore the database")
+    s.add_argument("--list", action="store_true", help="list snapshots with integrity")
+    s.add_argument("--verify", metavar="PATH", default="", help="integrity_check one file")
+    s.add_argument(
+        "--restore", metavar="PATH|latest", default="",
+        help="restore a snapshot; the current file is moved aside, never deleted",
+    )
+    s.add_argument("--hourly", type=int, default=24, help="snapshots kept by recency")
+    s.add_argument("--daily", type=int, default=30, help="calendar days kept")
+    s.set_defaults(func=cmd_backup)
 
     s = sub.add_parser("prune", help="trim old telemetry")
     s.add_argument("--days", type=float, default=30.0)

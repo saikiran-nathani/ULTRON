@@ -160,7 +160,11 @@ class Hub:
         self._db = sqlite3.connect(self.path, timeout=15.0, check_same_thread=False)
         self._db.row_factory = sqlite3.Row
         self._db.execute("PRAGMA journal_mode=WAL")
-        self._db.execute("PRAGMA synchronous=NORMAL")
+        # ADR-0004: notes and pinned clips are durable state now, not scratch.
+        self._db.execute("PRAGMA synchronous=FULL")
+        # Per-connection, and off by default. HubPool builds one Hub per worker
+        # thread, so this is the right place for it.
+        self._db.execute("PRAGMA foreign_keys=ON")
         self._db.execute("PRAGMA busy_timeout=15000")
         self._db.executescript(SCHEMA)
         self._db.commit()

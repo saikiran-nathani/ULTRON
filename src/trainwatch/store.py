@@ -11,9 +11,10 @@ buffered in memory and flushed with a single `executemany` at most every
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 import time
-from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -69,6 +70,41 @@ CREATE INDEX IF NOT EXISTS idx_gpu_ts ON gpu (ts DESC);
 """
 
 RunRow = dict[str, Any]
+log = logging.getLogger("trainwatch.store")
+
+
+def _m001_metrics_unique(db: sqlite3.Connection) -> None:
+    """Unique (run_id, key, step) so a replayed spool is idempotent.
+
+    The TUF sink buffers to a local file when the network drops and replays on
+    reconnect. Replay is only safe if it cannot double-insert, which needs this
+    constraint plus the upsert in `flush()`.
+
+    A database written before this index existed may already hold duplicates,
+    and `CREATE UNIQUE INDEX` fails outright on those -- so dedupe first,
+    keeping the newest row per key.
+    """
+    db.execute(
+        """DELETE FROM metrics WHERE rowid NOT IN (
+               SELECT MAX(rowid) FROM metrics GROUP BY run_id, key, step)"""
+    )
+    db.execute(
+        """CREATE UNIQUE INDEX IF NOT EXISTS ux_metrics_run_key_step
+               ON metrics (run_id, key, step)"""
+    )
+    # idx_metrics_lookup covered the same three columns in the same order, so
+    # the unique index serves every query it served. Keeping both means
+    # maintaining two B-trees per insert to satisfy one lookup.
+    db.execute("DROP INDEX IF EXISTS idx_metrics_lookup")
+
+
+# (user_version, name, apply). Append only; never renumber or edit a shipped
+# entry -- a database in the wild has already recorded that it ran.
+_MIGRATIONS: tuple[tuple[int, str, Callable[[sqlite3.Connection], None]], ...] = (
+    (1, "metrics unique index", _m001_metrics_unique),
+)
+
+
 EventRow = dict[str, Any]
 
 # Rows buffered before an automatic flush, and the max age of the buffer.
@@ -96,15 +132,53 @@ class Store:
         # WAL: readers never block the writer, which is what lets the dashboard
         # poll a database the training loop is actively writing to.
         self._db.execute("PRAGMA journal_mode=WAL")
-        # NORMAL trades a fsync-per-commit for a fsync-per-checkpoint. On a crash
-        # we can lose the last commits; for telemetry that is the right trade.
-        self._db.execute("PRAGMA synchronous=NORMAL")
+        # FULL, not NORMAL: ADR-0004 made this file the system of record. Under
+        # WAL, NORMAL can lose the last committed transactions on power loss --
+        # it will not corrupt the file, but "committed" stops meaning committed.
+        # The fsync amortises over batch_rows, so the cost lands once per flush
+        # rather than once per metric.
+        self._db.execute("PRAGMA synchronous=FULL")
+        # Off by default in SQLite, and scoped to the connection. StorePool
+        # builds one Store per thread, so this __init__ *is* the per-connection
+        # factory. Without it every foreign key in the ADR-0004 schema is
+        # silently unenforced -- orphaned rows accumulate and nothing raises.
+        self._db.execute("PRAGMA foreign_keys=ON")
         self._db.execute("PRAGMA busy_timeout=15000")
         self._db.executescript(SCHEMA)
+        self._migrate()
         self._db.commit()
 
         self._buf: list[tuple[str, int, float, str, float]] = []
         self._last_flush = time.time()
+
+    # ── migrations ───────────────────────────────────────────────────────
+
+    def _migrate(self) -> None:
+        """Apply pending migrations, tracked in `PRAGMA user_version`.
+
+        ADR-0004 specified Alembic. It is not used, and the reason is worth
+        recording: Alembic earns its keep through `--autogenerate`, which
+        diffs SQLAlchemy models against the live schema. The same ADR rules out
+        an ORM, so there are no models to diff and Alembic reduces to ordered
+        hand-written SQL plus a dependency and an `env.py`. `user_version` is
+        SQLite's own answer to the same problem and costs neither.
+
+        Each step is written to be safe to re-run, because a step that raises
+        leaves `user_version` unbumped and will be retried on the next open.
+        DDL in Python's sqlite3 does not reliably participate in a transaction,
+        so idempotence is the guarantee we can actually rely on.
+        """
+        version = int(self._db.execute("PRAGMA user_version").fetchone()[0])
+        for target, name, apply in _MIGRATIONS:
+            if version >= target:
+                continue
+            log.info("migrating store to v%d (%s)", target, name)
+            apply(self._db)
+            # PRAGMA does not accept bound parameters. `target` is an int from
+            # the module-level tuple below, never from input.
+            self._db.execute(f"PRAGMA user_version = {int(target)}")
+            self._db.commit()
+            version = target
 
     # ── lifecycle ────────────────────────────────────────────────────────
 
@@ -222,8 +296,12 @@ class Store:
             self._last_flush = time.time()
             return
         rows, self._buf = self._buf, []
+        # Upsert, not INSERT: makes a replayed spool idempotent. See _migrate.
         self._db.executemany(
-            "INSERT INTO metrics (run_id, step, wall, key, value) VALUES (?, ?, ?, ?, ?)",
+            """INSERT INTO metrics (run_id, step, wall, key, value)
+                   VALUES (?, ?, ?, ?, ?)
+               ON CONFLICT(run_id, key, step) DO UPDATE SET
+                   wall = excluded.wall, value = excluded.value""",
             rows,
         )
         self._db.commit()
