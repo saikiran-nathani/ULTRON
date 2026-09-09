@@ -50,6 +50,18 @@ def _env_int(key: str, default: int) -> int:
     return int(_env_float(key, float(default)))
 
 
+def _env_bool(key: str, default: bool) -> bool:
+    """Truthy strings only. "0" and "false" must not read as True.
+
+    `bool(os.environ["X"])` is True for the string "0", which is how a flag
+    someone deliberately turned off ends up on.
+    """
+    raw = os.environ.get(key, "").strip().lower()
+    if not raw:
+        return default
+    return raw in {"1", "true", "yes", "on"}
+
+
 @dataclass(frozen=True, slots=True)
 class Config:
     """Everything the system reads from the environment, resolved once."""
@@ -84,6 +96,10 @@ class Config:
     allowed_hosts: str = ""
     # Optional bearer token on writes. Empty = open on the tailnet (ADR-0003 C6).
     token: str = ""
+    # ADR-0004 C7/C8. Off by default and self-activating: enforcement turns on
+    # as soon as a user row exists, so an instance with no account keeps
+    # working exactly as ADR-0003 left it. Set this to force it on regardless.
+    require_auth: bool = False
     # Explicit hub base URL for client machines; empty = localhost:port.
     _hub: str = ""
 
@@ -137,6 +153,7 @@ def load_config(dotenv: str | os.PathLike[str] | None = ".env") -> Config:
         blob_dir=Path(_env_str("TRAINWATCH_BLOB_DIR", "var/blobs")),
         allowed_hosts=_env_str("TRAINWATCH_ALLOWED_HOSTS", ""),
         token=_env_str("TRAINWATCH_TOKEN", ""),
+        require_auth=_env_bool("TRAINWATCH_REQUIRE_AUTH", False),
         _hub=_env_str("TRAINWATCH_HUB", ""),
         grad_norm_ceil=_env_float("TRAINWATCH_GRAD_NORM_CEIL", 100.0),
         entropy_floor=_env_float("TRAINWATCH_ENTROPY_FLOOR", 0.15),

@@ -38,12 +38,14 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from .. import __version__
+from ..auth import Auth
 from ..config import Config, load_config
 from ..gpu import GpuSampler, throttle_is_significant
 from ..heartbeat import read_heartbeat
 from ..hub import Hub
 from ..security import SecurityGuard, resolve_allowed_hosts
 from ..store import Store
+from .auth_api import AuthGuard, build_auth_router
 from .hub_api import build_hub_router
 
 log = logging.getLogger("trainwatch.server")
@@ -96,6 +98,34 @@ class StorePool:
             self._all.clear()
 
 
+class AuthPool:
+    """One Auth (and therefore one SQLite connection) per worker thread."""
+
+    def __init__(self, path: Path) -> None:
+        self._path = path
+        self._local = threading.local()
+        self._all: list[Auth] = []
+        self._lock = threading.Lock()
+
+    def get(self) -> Auth:
+        auth: Auth | None = getattr(self._local, "auth", None)
+        if auth is None:
+            auth = Auth(self._path)
+            self._local.auth = auth
+            with self._lock:
+                self._all.append(auth)
+        return auth
+
+    def close_all(self) -> None:
+        with self._lock:
+            for auth in self._all:
+                try:
+                    auth.close()
+                except Exception:
+                    log.debug("closing pooled auth failed", exc_info=True)
+            self._all.clear()
+
+
 class HubPool:
     """One Hub (and therefore one SQLite connection) per worker thread."""
 
@@ -130,6 +160,7 @@ def create_app(config: Config | None = None) -> FastAPI:
     cfg = config or load_config()
     pool = StorePool(cfg.db_path)
     hub_pool = HubPool(cfg.db_path, cfg.blob_dir)
+    auth_pool = AuthPool(cfg.db_path)
     sampler = GpuSampler(Store(cfg.db_path), interval=5.0)
     allowed_hosts = resolve_allowed_hosts(cfg.allowed_hosts)
 
@@ -197,6 +228,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             sampler.stop()
             pool.close_all()
             hub_pool.close_all()
+            auth_pool.close_all()
 
     app = FastAPI(
         title="trainwatch",
@@ -207,6 +239,21 @@ def create_app(config: Config | None = None) -> FastAPI:
         openapi_url="/api/openapi.json",
     )
 
+    # ── middleware order is load-bearing ────────────────────────────────
+    # Starlette's add_middleware inserts at position 0, so the LAST one added
+    # is the OUTERMOST. SecurityGuard has to be outermost: ADR-0003's Host
+    # allowlist is what stops DNS rebinding, and it must reject a request
+    # before AuthGuard opens a database connection on its behalf. So AuthGuard
+    # is registered first and SecurityGuard second. test_auth_http asserts the
+    # resulting precedence rather than trusting this comment.
+    #
+    # ADR-0004 C7/C8/C10/C12. Self-activating: a no-op until a user exists.
+    app.add_middleware(
+        AuthGuard,
+        auth_factory=auth_pool.get,
+        require=cfg.require_auth,
+    )
+
     # The dashboard is writable now, so the browser is the threat model — not
     # the tailnet. See ADR-0003; this one line is what closes DNS rebinding.
     app.add_middleware(
@@ -214,6 +261,8 @@ def create_app(config: Config | None = None) -> FastAPI:
         allowed_hosts=allowed_hosts,
         token=cfg.token,
     )
+
+    app.include_router(build_auth_router(auth_pool.get))
 
     # ── snapshot assembly ────────────────────────────────────────────────
 

@@ -137,18 +137,35 @@ def test_empty_database_does_not_explode(cfg: Config) -> None:
 def test_training_telemetry_stays_read_only(client: TestClient) -> None:
     """ADR-0003 made the *hub* writable; the training half must not follow.
 
-    The original invariant was "the whole API is GET-only". That is now false
-    on purpose, so this narrows rather than disappears: no run, metric, event
-    or GPU route may ever accept a mutation. The trainer writes to SQLite; the
-    server only reads it. A write endpoint here would mean the dashboard could
-    falsify a training record.
+    The original invariant was "the whole API is GET-only". That became false
+    on purpose when the hub gained writes, so it narrowed rather than
+    disappeared. ADR-0004 narrows it a second time, and it is worth being
+    precise about what is actually being protected.
+
+    The property is: **a browser session must not be able to falsify a
+    training record.** "No write routes at all" was a proxy for that, and it
+    held while the trainer and the server shared a filesystem.
+
+    Two kinds of route are now exempt, for different reasons:
+
+    - `/api/auth/*` writes sessions and login attempts. It touches no run,
+      metric, event or GPU row, so it cannot falsify a training record.
+    - `/api/telemetry` *does* write training records, because the hub moved to
+      the Mac and the trainer is on the TUF, so ingest has to cross the
+      network. It is exempt from the route-shape check and covered instead by
+      `test_telemetry_refuses_a_browser_session`, which tests the real
+      property directly: the route requires a machine token and refuses a
+      cookie-borne identity outright, owner included.
+
+    Testing the property beats testing the proxy. Everything else stays
+    read-only.
     """
     schema = client.get("/api/openapi.json").json()
     offenders = [
         f"{method.upper()} {path}"
         for path, ops in schema["paths"].items()
         for method in ops
-        if method in ("post", "put", "patch", "delete") and not _is_hub_path(path)
+        if method in ("post", "put", "patch", "delete") and not _may_write(path)
     ]
     assert offenders == [], f"training routes must stay read-only: {offenders}"
 
@@ -157,6 +174,11 @@ def _is_hub_path(path: str) -> bool:
     return path.startswith(
         ("/api/clip", "/api/clips", "/api/files", "/api/links", "/api/notes", "/api/hub")
     )
+
+
+def _may_write(path: str) -> bool:
+    """Routes allowed to accept a mutation. See the invariant's docstring."""
+    return _is_hub_path(path) or path.startswith(("/api/auth", "/api/telemetry"))
 
 
 def test_the_hub_half_does_have_writes(client: TestClient) -> None:
