@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import getpass
 import logging
 import math
 import os
@@ -10,6 +11,7 @@ import pathlib
 import platform
 import random
 import shutil
+import sqlite3
 import subprocess
 import sys
 import time
@@ -17,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from . import __version__, backup
+from .auth import Auth
 from .client import HubClient, HubError, os_clipboard_read, os_clipboard_write
 from .config import Config, load_config
 from .curriculum import Curriculum
@@ -145,6 +148,104 @@ def _git_sha() -> str:
     except (OSError, subprocess.SubprocessError):
         return ""
     return out.stdout.strip() if out.returncode == 0 else ""
+
+
+def cmd_user(args: argparse.Namespace, cfg: Config) -> int:
+    """Create, re-password or disable the human account. ADR-0004 C7-C9."""
+    with Auth(cfg.db_path) as auth:
+        if args.action in {"add", "passwd"}:
+            # getpass, never argv: a password on the command line lands in the
+            # shell history and in `ps` output for every user on the box.
+            pw = getpass.getpass("password (min 12 chars): ")
+            if pw != getpass.getpass("again: "):
+                print(red("passwords do not match"))
+                return 2
+            try:
+                if args.action == "add":
+                    auth.create_user(args.name, pw, role=args.role)
+                    print(f"created {cyan(args.name)} ({args.role})")
+                else:
+                    auth.set_password(args.name, pw)
+                    print(f"password changed for {cyan(args.name)}")
+                    print(dim("  every live session for this account was revoked"))
+            except (ValueError, KeyError) as exc:
+                print(red(str(exc)))
+                return 2
+            except sqlite3.IntegrityError:
+                print(red(f"user {args.name!r} already exists"))
+                return 2
+            return 0
+
+        try:
+            auth.disable_user(args.name)
+        except KeyError as exc:
+            print(red(str(exc)))
+            return 2
+        print(f"disabled {cyan(args.name)}; sessions revoked")
+        return 0
+
+
+def cmd_token(args: argparse.Namespace, cfg: Config) -> int:
+    """Machine identities. ADR-0004 C10."""
+    with Auth(cfg.db_path) as auth:
+        if args.action == "list":
+            rows = auth.tokens()
+            if not rows:
+                print(dim("no tokens"))
+                return 0
+            for r in rows:
+                state = red("revoked") if r["revoked_at"] else green("live")
+                used = _ago(r["last_used"]) if r["last_used"] else dim("never used")
+                print(f"  {r['name']:<18} {state:<18} {r['scopes'] or '-':<24} {used}")
+            return 0
+
+        if args.action == "revoke":
+            try:
+                auth.revoke_token(args.name)
+            except KeyError as exc:
+                print(red(str(exc)))
+                return 2
+            print(f"revoked {cyan(args.name)}")
+            return 0
+
+        scopes = {s.strip() for s in args.scopes.split(",") if s.strip()}
+        if not scopes:
+            print(red("--scopes is required, e.g. --scopes telemetry:write"))
+            return 2
+        try:
+            grant = auth.create_token(
+                args.name, scopes, ttl=args.ttl * 86400 if args.ttl else None
+            )
+        except sqlite3.IntegrityError:
+            print(red(f"a token named {args.name!r} already exists"))
+            return 2
+        print(f"token for {cyan(args.name)}  scopes={','.join(sorted(scopes))}")
+        print()
+        print(f"  {grant.secret}")
+        print()
+        print(dim("  Shown once. Only its SHA-256 is stored, so this cannot be recovered."))
+        print(dim("  Put it in the client's .env as TRAINWATCH_TOKEN."))
+        return 0
+
+
+def cmd_audit(args: argparse.Namespace, cfg: Config) -> int:
+    """Read the audit log, or verify its hash chain. ADR-0004 C11."""
+    with Auth(cfg.db_path) as auth:
+        if args.verify:
+            ok, why = auth.verify_chain()
+            print(f"{green('chain intact') if ok else red('CHAIN BROKEN')} — {why}")
+            if not ok:
+                print(dim("  A row was edited, deleted or reordered after it was written."))
+            return 0 if ok else 1
+        rows = auth.audit(limit=args.limit)
+        if not rows:
+            print(dim("nothing recorded yet"))
+            return 0
+        for r in reversed(rows):
+            target = f" → {r['target']}" if r["target"] else ""
+            print(f"  {_ago(r['ts']):>12}  {r['actor_kind']:<7} {r['actor_id']:<10} "
+                  f"{r['action']}{target}")
+        return 0
 
 
 def cmd_curriculum(args: argparse.Namespace, cfg: Config) -> int:
@@ -807,6 +908,17 @@ def _fmt(value: float | None, unit: str) -> str:
     return dim("n/a") if value is None else f"{value:.0f}{unit}"
 
 
+def _ago(ts: float | None) -> str:
+    """Coarse relative time. Precision past "3d ago" is noise in a log listing."""
+    if ts is None:
+        return "never"
+    delta = max(0.0, time.time() - ts)
+    for size, unit in ((86400.0, "d"), (3600.0, "h"), (60.0, "m")):
+        if delta >= size:
+            return f"{int(delta // size)}{unit} ago"
+    return "just now"
+
+
 def _bytes(n: float) -> str:
     for unit in ("B", "KiB", "MiB", "GiB"):
         if n < 1024:
@@ -927,6 +1039,24 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--port", type=int, default=None)
     s.add_argument("--off", action="store_true", help="stop serving")
     s.set_defaults(func=cmd_share)
+
+    s = sub.add_parser("user", help="the human account")
+    s.add_argument("action", choices=["add", "passwd", "disable"])
+    s.add_argument("name")
+    s.add_argument("--role", choices=["owner", "viewer"], default="owner")
+    s.set_defaults(func=cmd_user)
+
+    s = sub.add_parser("token", help="machine identities for the TUF, cron, agents")
+    s.add_argument("action", choices=["create", "list", "revoke"])
+    s.add_argument("name", nargs="?", default="")
+    s.add_argument("--scopes", default="", help="comma separated, e.g. telemetry:write")
+    s.add_argument("--ttl", type=float, default=0.0, help="days until expiry; 0 = never")
+    s.set_defaults(func=cmd_token)
+
+    s = sub.add_parser("audit", help="who changed what, and whether the log is intact")
+    s.add_argument("--limit", type=int, default=40)
+    s.add_argument("--verify", action="store_true", help="recompute the hash chain")
+    s.set_defaults(func=cmd_audit)
 
     s = sub.add_parser("curriculum", help="curriculum progress: seed, record, render")
     s.add_argument("--seed", metavar="YAML", default="", help="load declarations from YAML")

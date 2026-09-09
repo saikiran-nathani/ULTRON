@@ -45,6 +45,9 @@ CORE_MODULES = (
     # than at module scope.
     "curriculum",
     "progress",
+    # Password hashing is hashlib.scrypt precisely so this stays true; see the
+    # "Why scrypt and not Argon2id" note in auth.py.
+    "auth",
 )
 
 PROBE = """

@@ -246,11 +246,98 @@ def _m002_curriculum(db: sqlite3.Connection) -> None:
     )
 
 
+def _m003_auth(db: sqlite3.Connection) -> None:
+    """Identity, sessions, machine tokens and the audit chain — ADR-0004.
+
+    Tailscale remains the network boundary. This is defence in depth *inside*
+    it, and its main job is attribution rather than exclusion: of the six
+    actors that write here -- one person, agent sessions, the TUF trainer, the
+    liveness cron, an iPad -- five are machines. The question the schema has to
+    answer is "what changed my infrastructure, and when", not "who is allowed
+    in". Tailscale already answers the second.
+
+    Secrets are stored hashed, never in plaintext:
+
+    - `sessions.id` is the SHA-256 of the cookie value.
+    - `api_tokens.secret_hash` is the SHA-256 of the token secret. SHA-256 is
+      correct there and a KDF would be theatre: a 256-bit random secret has no
+      dictionary to attack, so stretching it buys nothing and costs latency on
+      every request a trainer makes.
+    - `users.pw_hash` is scrypt, which *does* need stretching because a
+      password is low-entropy and chosen by a human.
+
+    A leak of this file therefore yields nothing replayable.
+    """
+    db.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS users (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            username      TEXT NOT NULL UNIQUE,
+            pw_hash       TEXT NOT NULL,
+            role          TEXT NOT NULL DEFAULT 'viewer'
+                              CHECK (role IN ('owner', 'viewer')),
+            created_at    REAL NOT NULL,
+            pw_changed_at REAL NOT NULL,
+            disabled_at   REAL
+        );
+
+        CREATE TABLE IF NOT EXISTS sessions (
+            id         TEXT PRIMARY KEY,
+            user_id    INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+            created_at REAL NOT NULL,
+            last_seen  REAL NOT NULL,
+            expires_at REAL NOT NULL,
+            ip         TEXT NOT NULL DEFAULT '',
+            ua         TEXT NOT NULL DEFAULT '',
+            revoked_at REAL
+        );
+        CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions (user_id);
+
+        CREATE TABLE IF NOT EXISTS api_tokens (
+            id          TEXT PRIMARY KEY,
+            name        TEXT NOT NULL UNIQUE,
+            secret_hash TEXT NOT NULL,
+            scopes      TEXT NOT NULL DEFAULT '',
+            created_at  REAL NOT NULL,
+            last_used   REAL,
+            expires_at  REAL,
+            revoked_at  REAL
+        );
+
+        CREATE TABLE IF NOT EXISTS login_attempts (
+            id       INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL,
+            ip       TEXT NOT NULL DEFAULT '',
+            ts       REAL NOT NULL,
+            ok       INTEGER NOT NULL CHECK (ok IN (0, 1))
+        );
+        CREATE INDEX IF NOT EXISTS idx_login_attempts
+            ON login_attempts (username, ts DESC);
+
+        CREATE TABLE IF NOT EXISTS audit_log (
+            seq        INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts         REAL NOT NULL,
+            actor_kind TEXT NOT NULL
+                           CHECK (actor_kind IN ('human', 'machine', 'system')),
+            actor_id   TEXT NOT NULL,
+            action     TEXT NOT NULL,
+            target     TEXT NOT NULL DEFAULT '',
+            detail     TEXT NOT NULL DEFAULT '{}',
+            request_id TEXT NOT NULL DEFAULT '',
+            prev_hash  TEXT NOT NULL,
+            hash       TEXT NOT NULL UNIQUE
+        );
+        CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_log (ts DESC);
+        """
+    )
+
+
 # (user_version, name, apply). Append only; never renumber or edit a shipped
 # entry -- a database in the wild has already recorded that it ran.
 _MIGRATIONS: tuple[tuple[int, str, Callable[[sqlite3.Connection], None]], ...] = (
     (1, "metrics unique index", _m001_metrics_unique),
     (2, "curriculum progress tables", _m002_curriculum),
+    (3, "identity, sessions, tokens, audit chain", _m003_auth),
 )
 
 

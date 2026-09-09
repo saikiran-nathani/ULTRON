@@ -182,7 +182,7 @@ The trip-wire that would bring Alembic back: adopting an ORM, or needing real do
 
 | Element | Choice | Rejected alternative |
 |---|---|---|
-| Password hashing | Argon2id (`argon2-cffi`), m=64 MiB, t=3, p=4 | bcrypt — 72-byte truncation; passlib — heavy and stagnant |
+| Password hashing | **stdlib `hashlib.scrypt`**, N=2^17 r=8 p=1 — revised, see below | Argon2id: a compiled dependency in the training environment. bcrypt: 72-byte truncation. passlib: heavy and stagnant. |
 | Session | Server-side, rows in SQLite | JWT: logout cannot revoke without a denylist, which is sessions with extra steps |
 | Cookie | `__Host-tw_session`; `HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/` | |
 | Token entropy | `secrets.token_urlsafe(32)` — 256 bits | |
@@ -192,6 +192,35 @@ The trip-wire that would bring Alembic back: adopting an ORM, or needing real do
 | Brute force | 5 failures → exponential backoff per `(username, ip)`; generic error text | |
 | Comparison | `hmac.compare_digest` everywhere | `==` leaks timing |
 | RBAC | `owner` (all) · `viewer` (read) · machine scopes | small, but the enforcement point exists from day one |
+
+### Password hashing — scrypt, not Argon2id
+
+**Revised during implementation**, for the same class of reason as the Alembic reversal: a
+stated choice collided with a stronger existing constraint.
+
+`argon2-cffi` is not installed, and installing it conflicts with
+`tests/test_zero_dependency_core.py`, which asserts that the core imports on a bare
+interpreter — *"the training loop imports it, and a monitoring library must never be the
+reason a six-hour run fails to start."* `cli` is on that list, and the CLI is where accounts
+and tokens are managed. PyYAML could be pushed into a lazy import because seeding is a rare
+maintenance action; password verification is on the hot path of every login, so hiding it
+inside a function would only move the failure to the worst possible moment.
+
+`hashlib.scrypt` is stdlib, memory-hard, and listed by OWASP as an acceptable alternative to
+Argon2id. Against this threat model — single user, tailnet-only, no public ingress, therefore
+no credential-stuffing surface — the marginal difference against properly parameterised scrypt
+is negligible; a compiled dependency on the 4 GB training box is not.
+
+Measured cost at N=2^17, r=8, p=1: **~150 ms**, which is the right order for a login.
+
+**The trap, because it fails opaquely.** `hashlib.scrypt` rejects OWASP-grade parameters under
+its default `maxmem` — OpenSSL caps at 32 MB, and 128·N·r is 134 MB — raising
+`ValueError: [digital envelope routines] memory limit exceeded`, which names neither scrypt
+nor the parameter at fault. `maxmem` is therefore computed from `n` and `r` at each call
+rather than held as a constant, so the two cannot drift; a constant derived from the default
+`N` goes stale the moment `N` is raised. A test raises `N` specifically to prove that.
+
+Trip-wire that brings Argon2id back: public ingress, or more than one human.
 
 **Cookie trap.** The `__Host-` prefix requires the `Secure` attribute. Browsers treat
 `http://localhost` as a secure context and permit `Secure` there, but behaviour differs from
@@ -215,7 +244,7 @@ C1–C6 from ADR-0003 are unchanged and still enforced by `SecurityGuard`.
 |---|---|---|
 | C7 | `__Host-` prefixed `HttpOnly` `Secure` `SameSite=Lax` cookie | XSS token theft, cross-origin send, subdomain injection |
 | C8 | Server-side revocable sessions | logout that does not revoke; stolen-token persistence |
-| C9 | Argon2id + per-account backoff + generic errors | offline cracking, brute force, user enumeration |
+| C9 | scrypt (N=2^17, r=8, p=1) + per-(user, ip) backoff + generic errors | offline cracking, brute force, user enumeration |
 | C10 | Scoped machine tokens, hashed at rest, revocable, last-used tracked | blast radius of a leaked device token |
 | C11 | Hash-chained append-only audit log | unattributed and unnoticed writes |
 | C12 | Synchroniser CSRF token on human write routes | residual CSRF beyond C2/C3 |
