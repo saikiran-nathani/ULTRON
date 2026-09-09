@@ -18,13 +18,14 @@ import time
 from pathlib import Path
 from typing import Any
 
-from . import __version__, backup
+from . import __version__, backup, service
 from .auth import Auth
 from .client import HubClient, HubError, os_clipboard_read, os_clipboard_write
 from .config import Config, load_config
 from .curriculum import Curriculum
 from .gpu import nvidia_smi_available, sample_gpus
 from .heartbeat import read_heartbeat
+from .lineage import Lineage, render_baseline
 from .liveness import check_liveness
 from .notify import Notifier
 from .progress import render_status, seed_from_yaml
@@ -149,6 +150,133 @@ def _git_sha() -> str:
     except (OSError, subprocess.SubprocessError):
         return ""
     return out.stdout.strip() if out.returncode == 0 else ""
+
+
+def cmd_lineage(args: argparse.Namespace, cfg: Config) -> int:
+    """Record and report experiment lineage. ADR-0004 phase E."""
+    with Lineage(cfg.db_path) as lin:
+        if args.record_eval:
+            try:
+                subject, task_set, k, seed, score, n = args.record_eval.split(",")
+                lin.record_eval(
+                    subject_kind=args.subject_kind,
+                    subject_id=subject.strip(),
+                    harness_sha=args.harness or _git_sha(),
+                    task_set=task_set.strip(),
+                    k=int(k),
+                    seed=int(seed),
+                    score=float(score),
+                    n_problems=int(n),
+                    machine=args.machine or platform.node(),
+                )
+            except ValueError as exc:
+                print(red(f"--eval takes SUBJECT,TASKSET,K,SEED,SCORE,N ({exc})"))
+                print(dim("  e.g. --eval ckpt-500,humaneval+,1,0,0.312,164"))
+                return 2
+            print(f"recorded {cyan(subject.strip())} seed={seed} score={score}")
+            return 0
+
+        if args.provenance:
+            prov = lin.provenance(args.provenance)
+            if prov is None:
+                print(red(f"no such checkpoint: {args.provenance}"))
+                return 2
+            print(f"{cyan(prov['id'])}  step {prov['step']}  {prov['kind']}")
+            print(f"  run      {prov['run_name']} ({prov['run_id']})")
+            print(f"  machine  {prov['machine'] or '—'}  commit {prov['commit_sha'] or '—'}")
+            print(f"  config   {prov['config']['id'] if prov['config'] else '—'}")
+            chain = " ← ".join(d["id"] for d in prov["datasets"]) or "—"
+            print(f"  data     {chain}")
+            for group in prov["evals"]:
+                mark = "" if group.enough_seeds else red(" (needs 3 seeds)")
+                print(f"  eval     {group.task_set} pass@{group.k}  "
+                      f"{group.format_score()}{mark}")
+            return 0
+
+        if args.check:
+            # A gate has to interrogate the data, not the filesystem. The
+            # curriculum's baseline gate used `test -f results/00-baseline.md`,
+            # which this command can satisfy by writing an empty report -- so
+            # the gate would have gone green the moment the report existed,
+            # with no eval behind it.
+            groups = lin.eval_groups(task_set=args.task_set or None)
+            solid = [g for g in groups if g.enough_seeds]
+            if not solid:
+                recorded = len(groups)
+                print(red("no eval has three seeds yet"))
+                if recorded:
+                    print(dim(f"  {recorded} group(s) recorded, none with 3 seeds"))
+                else:
+                    print(dim("  nothing recorded — src/eval/harness.py does not exist"))
+                return 1
+            for group in solid:
+                print(f"{green('ok')}  {group.subject_id}  {group.task_set} "
+                      f"pass@{group.k}  {group.format_score()}  "
+                      f"({len(group.seeds)} seeds)")
+            return 0
+
+        text = render_baseline(lin)
+        if args.baseline:
+            out = pathlib.Path(args.baseline)
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_text(text)
+            groups = lin.eval_groups()
+            print(f"wrote {cyan(str(out))}  ({len(groups)} result group(s))")
+            thin = [g for g in groups if not g.enough_seeds]
+            if thin:
+                print(red(f"  {len(thin)} group(s) have fewer than three seeds"))
+        else:
+            print(text)
+        return 0
+
+
+def cmd_service(args: argparse.Namespace, cfg: Config) -> int:
+    """Print or write the service unit that keeps trainwatch running.
+
+    Loading it is left to you: a unit that starts at login is a persistent
+    change to how the machine boots, and that is not mine to make.
+    """
+    repo = pathlib.Path.cwd()
+    env: dict[str, str] = {}
+    # Carry only what the unit cannot rediscover. A service does not inherit
+    # the shell that had these exported, and TRAINWATCH_TOKEN in particular is
+    # the difference between shipping and a silent 401.
+    for key in ("TRAINWATCH_DB", "TRAINWATCH_HUB", "TRAINWATCH_TOKEN",
+                "TRAINWATCH_NTFY_TOPIC", "TRAINWATCH_ALLOWED_HOSTS"):
+        value = os.environ.get(key, "")
+        if value:
+            env[key] = value
+
+    try:
+        text = service.render(args.unit, repo=repo, env=env)
+    except KeyError as exc:
+        print(red(str(exc)))
+        return 2
+    path = service.unit_path(args.unit)
+
+    if not args.write:
+        print(dim(f"# would be written to {path}"))
+        print(text, end="")
+        print(dim(f"# then: {' '.join(service.load_command(args.unit))}"))
+        print(dim("# re-run with --write to create the file"))
+        return 0
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists() and not args.force:
+        print(red(f"{path} already exists; pass --force to replace it"))
+        return 2
+    path.write_text(text)
+    print(f"wrote {cyan(str(path))}")
+    if "TRAINWATCH_TOKEN" not in env and args.unit == "ship":
+        print(red("  TRAINWATCH_TOKEN was not set, so the unit carries no token"))
+        print(dim("  export it and re-run, or the service will 401 silently"))
+    print()
+    print("  " + " ".join(service.load_command(args.unit)))
+    print()
+    print(dim(f"  logs: tail -f {repo}/var/{args.unit}.log"))
+    if not service.available():
+        print(red("  note: this platform's service manager was not found on PATH"))
+    return 0
 
 
 def cmd_ship(args: argparse.Namespace, cfg: Config) -> int:
@@ -1088,6 +1216,28 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--port", type=int, default=None)
     s.add_argument("--off", action="store_true", help="stop serving")
     s.set_defaults(func=cmd_share)
+
+    s = sub.add_parser("lineage", help="experiment lineage and eval results")
+    s.add_argument("--baseline", metavar="PATH", default="",
+                   help="render the eval report to a file")
+    s.add_argument("--eval", dest="record_eval", metavar="SPEC", default="",
+                   help="record one seed: SUBJECT,TASKSET,K,SEED,SCORE,N")
+    s.add_argument("--subject-kind", choices=["base", "checkpoint", "served"],
+                   default="checkpoint")
+    s.add_argument("--harness", default="", help="harness sha (default: this repo's HEAD)")
+    s.add_argument("--machine", default="", help="defaults to this host's name")
+    s.add_argument("--check", action="store_true",
+                   help="exit 1 unless some eval has three seeds (a real gate)")
+    s.add_argument("--task-set", default="", help="restrict --check to one task set")
+    s.add_argument("--provenance", metavar="CHECKPOINT", default="",
+                   help="show everything known about how a checkpoint was made")
+    s.set_defaults(func=cmd_lineage)
+
+    s = sub.add_parser("service", help="the unit that keeps this running after logout")
+    s.add_argument("unit", choices=sorted(service.UNITS), help="hub (Mac) or ship (TUF)")
+    s.add_argument("--write", action="store_true", help="create the file (default: print)")
+    s.add_argument("--force", action="store_true", help="replace an existing unit")
+    s.set_defaults(func=cmd_service)
 
     s = sub.add_parser("ship", help="replicate telemetry to a remote hub")
     s.add_argument("--once", action="store_true", help="ship what is pending and exit")

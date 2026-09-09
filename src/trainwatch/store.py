@@ -414,6 +414,96 @@ def _m004_replication(db: sqlite3.Connection) -> None:
             )
 
 
+def _m005_lineage(db: sqlite3.Connection) -> None:
+    """Experiment lineage — ADR-0004 phase E.
+
+    The difference between "loss went down" and "loss went down, on this data,
+    with this config, at this commit, on this machine". Without it a result is
+    an anecdote: reproducible only by whoever still remembers what they ran.
+
+    Two constraints carry most of the weight.
+
+    `configs.id` is the SHA-256 of the canonical YAML, so an identical config
+    is the same row no matter who recorded it, and a config that differs by one
+    character is visibly a different row rather than an edit.
+
+    `evals` is UNIQUE on (subject, harness, task_set, k, seed). That makes
+    "three seeds" enforceable instead of aspirational: the same seed cannot be
+    recorded twice and counted as two, which is the easiest way to make a
+    result look more solid than it is. Re-running one seed updates it rather
+    than appending, because a second measurement of the same seed replaces the
+    first -- it does not corroborate it.
+    """
+    db.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS datasets (
+            id          TEXT PRIMARY KEY,
+            name        TEXT NOT NULL,
+            n_examples  INTEGER,
+            sha256      TEXT NOT NULL DEFAULT '',
+            built_at    REAL NOT NULL,
+            recipe      TEXT NOT NULL DEFAULT '{}',
+            parent_id   TEXT REFERENCES datasets (id) ON DELETE SET NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS configs (
+            id         TEXT PRIMARY KEY,
+            phase_id   INTEGER REFERENCES phases (id) ON DELETE SET NULL,
+            body       TEXT NOT NULL,
+            created_at REAL NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS checkpoints (
+            id         TEXT PRIMARY KEY,
+            run_id     TEXT NOT NULL REFERENCES runs (id) ON DELETE CASCADE,
+            step       INTEGER NOT NULL,
+            path       TEXT NOT NULL DEFAULT '',
+            sha256     TEXT NOT NULL DEFAULT '',
+            size_bytes INTEGER NOT NULL DEFAULT 0,
+            kind       TEXT NOT NULL DEFAULT 'adapter'
+                           CHECK (kind IN ('adapter', 'merged', 'gguf')),
+            created_at REAL NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_checkpoints_run ON checkpoints (run_id, step);
+
+        CREATE TABLE IF NOT EXISTS evals (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            subject_kind TEXT NOT NULL
+                             CHECK (subject_kind IN ('base', 'checkpoint', 'served')),
+            subject_id   TEXT NOT NULL,
+            harness_sha  TEXT NOT NULL,
+            task_set     TEXT NOT NULL,
+            k            INTEGER NOT NULL CHECK (k >= 1),
+            seed         INTEGER NOT NULL,
+            score        REAL NOT NULL CHECK (score >= 0.0 AND score <= 1.0),
+            n_problems   INTEGER NOT NULL CHECK (n_problems > 0),
+            ran_at       REAL NOT NULL,
+            machine      TEXT NOT NULL DEFAULT '',
+            UNIQUE (subject_kind, subject_id, harness_sha, task_set, k, seed)
+        );
+        CREATE INDEX IF NOT EXISTS idx_evals_subject
+            ON evals (subject_kind, subject_id, task_set, k);
+        """
+    )
+
+    # ALTER TABLE ADD COLUMN is the only shape SQLite offers, and it must not
+    # be re-attempted: a second add raises "duplicate column name" and would
+    # leave user_version unbumped, so the migration would retry forever.
+    # A REFERENCES column added this way must default to NULL, which these do.
+    if _table_exists(db, "runs"):
+        have = {row[1] for row in db.execute("PRAGMA table_info(runs)")}
+        additions = (
+            ("config_id", "TEXT REFERENCES configs (id) ON DELETE SET NULL"),
+            ("dataset_id", "TEXT REFERENCES datasets (id) ON DELETE SET NULL"),
+            ("phase_id", "INTEGER REFERENCES phases (id) ON DELETE SET NULL"),
+            ("machine", "TEXT NOT NULL DEFAULT ''"),
+            ("commit_sha", "TEXT NOT NULL DEFAULT ''"),
+        )
+        for column, spec in additions:
+            if column not in have:
+                db.execute(f"ALTER TABLE runs ADD COLUMN {column} {spec}")
+
+
 # (user_version, name, apply). Append only; never renumber or edit a shipped
 # entry -- a database in the wild has already recorded that it ran.
 _MIGRATIONS: tuple[tuple[int, str, Callable[[sqlite3.Connection], None]], ...] = (
@@ -421,6 +511,7 @@ _MIGRATIONS: tuple[tuple[int, str, Callable[[sqlite3.Connection], None]], ...] =
     (2, "curriculum progress tables", _m002_curriculum),
     (3, "identity, sessions, tokens, audit chain", _m003_auth),
     (4, "replication cursors and dedupe keys", _m004_replication),
+    (5, "experiment lineage", _m005_lineage),
 )
 
 

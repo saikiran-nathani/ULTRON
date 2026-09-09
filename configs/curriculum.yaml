@@ -91,8 +91,12 @@ phases:
       if the number is wrong every later claim is wrong.
     gates:
       - slug: baseline-recorded
-        description: results/00-baseline.md exists with three seeds.
-        verify_cmd: test -f results/00-baseline.md
+        description: >-
+          At least one eval has three seeds recorded. Deliberately not
+          `test -f results/00-baseline.md`: that report is generated from the
+          database and exists even when empty, so a file check would go green
+          with no measurement behind it.
+        verify_cmd: python -m src.trainwatch.cli lineage --check
 
   - slug: data
     name: Phase 3 — Data curation

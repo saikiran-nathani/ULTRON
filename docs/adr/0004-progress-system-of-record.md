@@ -340,6 +340,23 @@ pipeline is blocked at Phase 1, the eval harness: pure Python, no compiler, no G
 standing in its way. This ADR is infrastructure for a project whose next real step is
 unblocked and unbuilt. Slicing A+C first is what keeps that honest.
 
+## What phases A-E delivered, and what was revised
+
+Four decisions in this ADR were reversed while implementing them. Each collided with a
+constraint that already existed and was stronger, which is recorded here so the pattern is
+visible rather than looking like drift.
+
+| Specified | Built | Why |
+|---|---|---|
+| Alembic migrations | `PRAGMA user_version` | Alembic's value is `--autogenerate`, which needs the ORM this ADR rules out |
+| Argon2id | stdlib `hashlib.scrypt` | `argon2-cffi` conflicts with the tested zero-dependency core, and password verification is too hot to hide in a lazy import |
+| A fourth *sink* | a *replicator* with a cursor | The local store is already durable, so it is the spool; a sink needs a second one and puts a socket in the training loop |
+| `test -f results/00-baseline.md` as the baseline gate | `trainwatch lineage --check` | The report is generated, so it exists even when empty — a file check would have gone green with no measurement behind it |
+
+The UI half of phase E is deliberately not built. The dashboard already renders runs, metrics
+and GPU history; lineage and curriculum are reachable through the CLI, which is where they are
+actually used. Building panels for data that has one row would be decoration.
+
 ## Non-goals
 
 Public exposure · multi-tenancy · OAuth/SSO · Postgres · a secret manager (`.env` at `0600`) ·

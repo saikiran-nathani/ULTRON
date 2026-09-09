@@ -48,6 +48,8 @@ CORE_MODULES = (
     # Replication uses urllib.request rather than requests, precisely so it can
     # sit in the training environment.
     "ship",
+    "service",
+    "lineage",
     # Password hashing is hashlib.scrypt precisely so this stays true; see the
     # "Why scrypt and not Argon2id" note in auth.py.
     "auth",

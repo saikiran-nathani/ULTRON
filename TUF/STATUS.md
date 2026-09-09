@@ -50,7 +50,7 @@ Not yet measured — each is a command, not an opinion:
 
 Not yet measured — each is a command, not an opinion:
 
-- `baseline-recorded` → `test -f results/00-baseline.md`
+- `baseline-recorded` → `python -m src.trainwatch.cli lineage --check`
 
 ### 🚧 Phase 3 — Data curation
 
