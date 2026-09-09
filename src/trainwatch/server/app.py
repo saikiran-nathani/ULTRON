@@ -47,6 +47,7 @@ from ..security import SecurityGuard, resolve_allowed_hosts
 from ..store import Store
 from .auth_api import AuthGuard, build_auth_router
 from .hub_api import build_hub_router
+from .telemetry_api import build_telemetry_router
 
 log = logging.getLogger("trainwatch.server")
 
@@ -263,6 +264,7 @@ def create_app(config: Config | None = None) -> FastAPI:
     )
 
     app.include_router(build_auth_router(auth_pool.get))
+    app.include_router(build_telemetry_router(pool.get))
 
     # ── snapshot assembly ────────────────────────────────────────────────
 

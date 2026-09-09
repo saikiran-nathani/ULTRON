@@ -45,6 +45,9 @@ CORE_MODULES = (
     # than at module scope.
     "curriculum",
     "progress",
+    # Replication uses urllib.request rather than requests, precisely so it can
+    # sit in the training environment.
+    "ship",
     # Password hashing is hashlib.scrypt precisely so this stays true; see the
     # "Why scrypt and not Argon2id" note in auth.py.
     "auth",

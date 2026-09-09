@@ -161,10 +161,7 @@ class AuthGuard:
         return None
 
     def _enforcing(self) -> bool:
-        if self.require:
-            return True
-        row = self._auth()._db.execute("SELECT 1 FROM users LIMIT 1").fetchone()
-        return row is not None
+        return True if self.require else self._auth().has_identities()
 
     async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
         if scope["type"] != "http":
@@ -302,14 +299,14 @@ def build_auth_router(auth_factory: Callable[[], Auth]) -> APIRouter:
     @router.get("/whoami")
     async def whoami(request: Request) -> Response:
         identity = (request.scope.get("state") or {}).get("identity")
-        enforcing = auth_factory()._db.execute("SELECT 1 FROM users LIMIT 1").fetchone()
+        enforcing = auth_factory().has_identities()
         if identity is None:
             return JSONResponse(
                 content={
                     "authenticated": False,
                     # So the SPA can tell "log in" apart from "this instance
-                    # has no accounts and is open on the tailnet".
-                    "enforcing": enforcing is not None,
+                    # has nothing enrolled and is open on the tailnet".
+                    "enforcing": enforcing,
                 }
             )
         return JSONResponse(

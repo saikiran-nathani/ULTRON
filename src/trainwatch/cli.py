@@ -28,6 +28,7 @@ from .heartbeat import read_heartbeat
 from .liveness import check_liveness
 from .notify import Notifier
 from .progress import render_status, seed_from_yaml
+from .ship import TelemetryShipper, ship_once
 from .store import Store
 
 # ── tiny ANSI helpers (no dependency on rich/colorama) ───────────────────
@@ -148,6 +149,54 @@ def _git_sha() -> str:
     except (OSError, subprocess.SubprocessError):
         return ""
     return out.stdout.strip() if out.returncode == 0 else ""
+
+
+def cmd_ship(args: argparse.Namespace, cfg: Config) -> int:
+    """Replicate local telemetry to a remote hub. ADR-0004 phase D.
+
+    Run this on the machine that trains. TRAINWATCH_HUB names the hub;
+    TRAINWATCH_TOKEN carries the twk_ token minted there with
+    `trainwatch token create tuf-trainer --scopes telemetry:write`.
+    """
+    url = args.url or cfg._hub
+    if not url:
+        print(red("no hub configured — set TRAINWATCH_HUB or pass --url"))
+        print(dim("  e.g. TRAINWATCH_HUB=https://sais-macbook-pro.tail1f999f.ts.net"))
+        return 2
+    token = args.token or cfg.token
+    if not token.startswith("twk_"):
+        print(red("TRAINWATCH_TOKEN is not a twk_ token"))
+        print(dim("  mint one on the hub: trainwatch token create tuf-trainer "
+                  "--scopes telemetry:write"))
+        return 2
+
+    if args.once:
+        try:
+            stats = ship_once(cfg.db_path, url, token)
+        except Exception as exc:  # noqa: BLE001 - report, do not traceback at a user
+            print(red(f"shipping failed: {type(exc).__name__}: {exc}"))
+            return 1
+        print(f"shipped {stats.batches} batch(es): {stats.metrics} metrics, "
+              f"{stats.gpu} gpu, {stats.events} events")
+        if stats.backlog and not stats.caught_up:
+            print(dim(f"  backlog remains: {stats.backlog}"))
+        return 0
+
+    shipper = TelemetryShipper(cfg.db_path, url, token, interval=args.interval)
+    shipper.start()
+    print(f"shipping {cyan(str(cfg.db_path))} → {cyan(url)} every {args.interval:.0f}s")
+    print(dim("  Ctrl-C to stop. The cursor is on disk, so stopping loses nothing."))
+    try:
+        while True:
+            time.sleep(args.interval)
+            st = shipper.stats
+            state = red(st.last_error) if st.last_error else green("ok")
+            print(f"  {st.metrics:>8} metrics  {st.failures} failure(s)  {state}")
+    except KeyboardInterrupt:
+        print()
+        shipper.stop()
+        print(dim(f"stopped. backlog: {shipper.stats.backlog}"))
+    return 0
 
 
 def cmd_user(args: argparse.Namespace, cfg: Config) -> int:
@@ -1039,6 +1088,13 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--port", type=int, default=None)
     s.add_argument("--off", action="store_true", help="stop serving")
     s.set_defaults(func=cmd_share)
+
+    s = sub.add_parser("ship", help="replicate telemetry to a remote hub")
+    s.add_argument("--once", action="store_true", help="ship what is pending and exit")
+    s.add_argument("--url", default="", help="hub URL (default: TRAINWATCH_HUB)")
+    s.add_argument("--token", default="", help="twk_ token (default: TRAINWATCH_TOKEN)")
+    s.add_argument("--interval", type=float, default=5.0)
+    s.set_defaults(func=cmd_ship)
 
     s = sub.add_parser("user", help="the human account")
     s.add_argument("action", choices=["add", "passwd", "disable"])

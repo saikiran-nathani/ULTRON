@@ -250,11 +250,30 @@ C1–C6 from ADR-0003 are unchanged and still enforced by `SecurityGuard`.
 | C12 | Synchroniser CSRF token on human write routes | residual CSRF beyond C2/C3 |
 | C13 | `foreign_keys=ON` · `synchronous=FULL` · hourly `VACUUM INTO` · restore drill | silent corruption, orphaned rows, data loss |
 
-## The TUF sink
+## The TUF sink — revised to a replicator
 
-`emit.py` has exactly three sinks — `StoreSink`, `TensorBoardSink`, `WandbSink` — and none of
-them touch the network. Only `client.py` and `notify.py` do. Hosting on the Mac therefore
-requires a fourth sink. Requirements in priority order:
+**Revised during implementation.** This ADR called for a fourth *sink*: something in the
+training loop that posts metrics over the network. That is the wrong shape.
+
+A sink needs its own spool to survive an outage, which is a second durable write path for rows
+the trainer already writes once, and it puts a socket in the hot loop where the failure mode is
+a stalled training step.
+
+The trainer already writes every metric to a local SQLite file, and phase A made that file
+`synchronous=FULL`. **So the local store is the spool**, and shipping is replication with a
+cursor: read rows above a watermark, post them, advance the watermark. Four properties then
+come for free rather than as features to build.
+
+- **Store-and-forward** is the default behaviour. An outage is a cursor that stops moving.
+- **The training loop never waits on a socket** — the shipper is a separate thread reading a
+  database, and can be stopped entirely without the trainer noticing.
+- **A crash is survivable.** The cursor is on disk, so a later shipper — a different process,
+  days later, or `trainwatch ship --once` by hand — resumes where this one stopped.
+- **Replay is safe.** The cursor advances only after a batch is accepted, so a post whose
+  response was lost is sent again and the receiver's unique keys absorb it.
+
+`src/trainwatch/ship.py`, using `urllib.request` rather than `requests` so it can sit in the
+training environment. The original requirements still hold and are met by this shape:
 
 1. **Never block the training loop.** Bounded queue, background thread, drop-newest with a
    counter on overflow. A monitoring stall must not stall a three-hour SFT run.
@@ -263,8 +282,42 @@ requires a fourth sink. Requirements in priority order:
 3. **Idempotent replay.** Upsert on `(run_id, key, step)`. Safe to run twice.
 4. **Authenticated** with a `telemetry:write` token, not an open endpoint.
 
-**Gate:** pull the cable mid-run, reconnect, and assert zero gaps *and* zero duplicates. Until
-that test exists, the sink is not done.
+**Gate:** pull the cable mid-run, reconnect, and assert zero gaps *and* zero duplicates.
+`test_gate_network_drops_mid_run_no_gaps_no_duplicates` stages it against a real socket — the
+hub is stopped while the trainer keeps writing, then restarted on the same port and database.
+
+### The invariant this crosses, and how it is kept
+
+`test_training_telemetry_stays_read_only` has guarded since ADR-0003 that no route may accept a
+training-record write, "because the dashboard could falsify a training record". Ingest breaks
+the *mechanism* — no write routes at all — which was only ever a proxy for the property, and
+held while trainer and server shared a filesystem.
+
+The property is now enforced directly: **`/api/telemetry` refuses a cookie-borne identity
+outright, owner included.** A `telemetry:write` machine token is the only way in, and a browser
+cannot obtain one by being logged in. The check is on `identity.kind`, not on scope, precisely
+so the owner's wildcard does not open the door.
+
+### Four defects this phase surfaced
+
+All found by integration tests against a real server, not by unit tests.
+
+1. **A skipped migration was still marked applied.** Migration 1 guarded on `metrics` existing,
+   since `Auth` or `Curriculum` may reach a fresh file before `Store` does — but skipping still
+   bumped `user_version`, so the unique index was never created and `flush()` failed with "ON
+   CONFLICT clause does not match any PRIMARY KEY or UNIQUE constraint". The guard turned a
+   crash into silent schema corruption. `migrate()` now applies the base schema before any step
+   runs, so no step has cause to no-op.
+2. **`SCHEMA` and migration 1 disagreed.** `SCHEMA` recreated `idx_metrics_lookup` on every
+   open while the migration dropped it once, so a file's indexes depended on how many times it
+   had been opened. Removed from `SCHEMA`.
+3. **Enforcement activated on `users` only.** A hub reached solely by the TUF's token — the
+   entire point of this phase — had no user row and served every request unauthenticated,
+   including ingest. `Auth.has_identities()` now counts a live token too.
+4. **`last_used` took a write lock on every read.** Updating it per request meant a dashboard
+   poll and a telemetry batch contended, and a burst of batches raised "database is locked"
+   while authenticating a request that was otherwise fine. Now throttled to 60 s and
+   non-fatal — the question it answers is "is this token still in use", not "when exactly".
 
 ## Build order
 

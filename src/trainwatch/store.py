@@ -39,7 +39,11 @@ CREATE TABLE IF NOT EXISTS metrics (
     key     TEXT NOT NULL,
     value   REAL NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_metrics_lookup ON metrics (run_id, key, step);
+-- No index here: migration 1 creates a UNIQUE one on the same three
+-- columns, which serves every query this used to. Declaring it in both
+-- places meant SCHEMA silently recreated on each open what the migration
+-- had dropped once, so the file's indexes depended on how many times it
+-- had been opened.
 
 CREATE TABLE IF NOT EXISTS events (
     id       INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -120,11 +124,24 @@ def migrate(db: sqlite3.Connection) -> int:
     SQL plus a dependency and an `env.py`. `user_version` is SQLite's own
     answer to the same question and costs neither.
 
-    Each step must be safe to re-run and must tolerate a database where its
-    target tables do not exist yet -- any of the three openers may reach a
-    fresh file first. A step that raises leaves `user_version` unbumped and is
-    retried on the next open, so idempotence is the only guarantee available.
+    The base tables are created here, before any step runs. That is not
+    tidiness -- it closes a hole that a guard alone could not.
+
+    Migration 1 adds a unique index to `metrics` and previously skipped when
+    that table was absent, since Auth or Curriculum may reach a fresh file
+    before Store does. But skipping still bumped `user_version`, so when Store
+    later created `metrics` the migration was already recorded as applied and
+    the index was never built. `flush()` then failed with "ON CONFLICT clause
+    does not match any PRIMARY KEY or UNIQUE constraint" -- a guard that turned
+    a crash into silent schema corruption, which is the worse trade.
+
+    Ensuring the schema first means every step sees the tables it targets, so
+    no step ever has cause to no-op. Steps stay individually re-runnable
+    because DDL in Python's sqlite3 does not reliably participate in a
+    transaction: a step that raises leaves `user_version` unbumped and is
+    retried on the next open.
     """
+    db.executescript(SCHEMA)
     version = int(db.execute("PRAGMA user_version").fetchone()[0])
     for target, name, apply in _MIGRATIONS:
         if version >= target:
@@ -150,8 +167,11 @@ def _m001_metrics_unique(db: sqlite3.Connection) -> None:
     and `CREATE UNIQUE INDEX` fails outright on those -- so dedupe first,
     keeping the newest row per key.
     """
+    # migrate() creates the base schema before any step, so this is
+    # defensive only -- see the note there about why it must not be the only
+    # thing standing between a fresh file and a missing index.
     if not _table_exists(db, "metrics"):
-        return  # Hub or Curriculum reached a fresh file first; Store creates it
+        return
     db.execute(
         """DELETE FROM metrics WHERE rowid NOT IN (
                SELECT MAX(rowid) FROM metrics GROUP BY run_id, key, step)"""
@@ -332,12 +352,75 @@ def _m003_auth(db: sqlite3.Connection) -> None:
     )
 
 
+def _m004_replication(db: sqlite3.Connection) -> None:
+    """Cursors and dedupe keys for replicating telemetry to a remote hub.
+
+    ADR-0004 phase D. The ADR called for a fourth *sink* -- something in the
+    training loop that posts over the network. That is the wrong shape here.
+    A sink needs its own spool to be durable, which is a second write path for
+    the same rows, and it puts a socket in the hot loop.
+
+    The trainer already writes every metric to a local SQLite file, and as of
+    phase A that file is `synchronous=FULL`. So the local store *is* the spool,
+    and shipping is replication with a cursor: read rows above the mark, post
+    them, advance. Store-and-forward is then not a feature to build but the
+    default behaviour -- a network outage is a cursor that stops moving, and
+    reconnecting catches up. Nothing the local store holds can be lost, and the
+    training loop never waits on a socket.
+
+    `ship_cursor` lives on the sender. The unique indexes matter on the
+    receiver, where a replayed batch must not double-insert:
+
+    - `metrics` already has one from migration 1, and `flush()` upserts.
+    - `gpu` gets (ts, gpu_index): the sampler reads every GPU at one timestamp,
+      so that pair is the natural key.
+    - `events` gets (run_id, ts, rule). Caveat worth stating: SQLite treats
+      NULLs as distinct, so events with no run_id are not deduped by it.
+      Those come from the liveness check rather than a run, they are rare, and
+      a duplicate alert is visibly harmless -- unlike a duplicated metric,
+      which silently doubles a chart.
+    """
+    db.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS ship_cursor (
+            name       TEXT PRIMARY KEY,
+            last_rowid INTEGER NOT NULL DEFAULT 0,
+            updated    REAL NOT NULL DEFAULT 0
+        );
+        """
+    )
+
+    if _table_exists(db, "gpu"):
+        names = {row[1] for row in db.execute("PRAGMA index_list(gpu)")}
+        if "ux_gpu_ts_index" not in names:
+            db.execute(
+                """DELETE FROM gpu WHERE rowid NOT IN (
+                       SELECT MAX(rowid) FROM gpu GROUP BY ts, gpu_index)"""
+            )
+            db.execute(
+                "CREATE UNIQUE INDEX ux_gpu_ts_index ON gpu (ts, gpu_index)"
+            )
+
+    if _table_exists(db, "events"):
+        names = {row[1] for row in db.execute("PRAGMA index_list(events)")}
+        if "ux_events_dedupe" not in names:
+            db.execute(
+                """DELETE FROM events WHERE rowid NOT IN (
+                       SELECT MAX(rowid) FROM events
+                        GROUP BY COALESCE(run_id, ''), ts, rule)"""
+            )
+            db.execute(
+                "CREATE UNIQUE INDEX ux_events_dedupe ON events (run_id, ts, rule)"
+            )
+
+
 # (user_version, name, apply). Append only; never renumber or edit a shipped
 # entry -- a database in the wild has already recorded that it ran.
 _MIGRATIONS: tuple[tuple[int, str, Callable[[sqlite3.Connection], None]], ...] = (
     (1, "metrics unique index", _m001_metrics_unique),
     (2, "curriculum progress tables", _m002_curriculum),
     (3, "identity, sessions, tokens, audit chain", _m003_auth),
+    (4, "replication cursors and dedupe keys", _m004_replication),
 )
 
 
@@ -363,7 +446,8 @@ class Store:
         self.batch_rows = batch_rows
 
         self._db = connect(self.path)
-        self._db.executescript(SCHEMA)
+        # migrate() applies SCHEMA before any step, so the base tables and
+        # every migration land in one place and in one order.
         migrate(self._db)
         self._db.commit()
 
@@ -579,11 +663,21 @@ class Store:
         body: str = "",
         step: int | None = None,
         notified: bool = False,
+        ts: float | None = None,
     ) -> int:
+        """Record an event. `ts` defaults to now.
+
+        `ts` is settable because a replicated event has to keep the timestamp
+        it was created with. Migration 4's dedupe key is (run_id, ts, rule);
+        re-stamping on arrival would give a replayed event a fresh key and
+        defeat the deduplication it depends on.
+        """
         cur = self._db.execute(
-            """INSERT INTO events (run_id, ts, level, rule, title, body, step, notified)
+            """INSERT OR IGNORE INTO events
+                   (run_id, ts, level, rule, title, body, step, notified)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-            (run_id, time.time(), level, rule, title, body, step, int(notified)),
+            (run_id, ts if ts is not None else time.time(),
+             level, rule, title, body, step, int(notified)),
         )
         self._db.commit()
         return int(cur.lastrowid or 0)
@@ -618,7 +712,8 @@ class Store:
         if not rows:
             return
         self._db.executemany(
-            """INSERT INTO gpu (ts, gpu_index, name, util, mem_used, mem_total, temp, power, clock_sm, throttle)
+            """INSERT OR IGNORE INTO gpu
+                   (ts, gpu_index, name, util, mem_used, mem_total, temp, power, clock_sm, throttle)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             rows,
         )

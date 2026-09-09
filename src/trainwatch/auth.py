@@ -43,6 +43,7 @@ import hmac
 import json
 import logging
 import secrets
+import sqlite3
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -78,6 +79,9 @@ SESSION_ABSOLUTE = 30 * 86400.0
 # attacker lock the owner out from anywhere.
 LOCKOUT_AFTER = 5
 LOCKOUT_WINDOW = 900.0
+
+# How coarsely api_tokens.last_used is maintained. See Auth.token().
+LAST_USED_RESOLUTION = 60.0
 
 TOKEN_PREFIX = "twk"  # noqa: S105 - a public identifier prefix, not a secret
 _GENESIS = "0" * 64
@@ -197,6 +201,25 @@ class Auth:
 
     def __exit__(self, *_exc: object) -> None:
         self.close()
+
+    # ── activation ───────────────────────────────────────────────────────
+
+    def has_identities(self) -> bool:
+        """Whether anything has been enrolled, and enforcement should apply.
+
+        Either a user or a machine token counts. Checking only `users` was a
+        bug: a hub reached solely by the TUF's `telemetry:write` token -- which
+        is the whole point of phase D -- would have had no user row and served
+        every request unauthenticated, including the ingest route. Minting a
+        token is an explicit request for authenticated access, so it activates
+        enforcement exactly as creating an account does.
+        """
+        row = self._db.execute(
+            """SELECT 1 WHERE EXISTS (SELECT 1 FROM users)
+                          OR EXISTS (SELECT 1 FROM api_tokens
+                                      WHERE revoked_at IS NULL)"""
+        ).fetchone()
+        return row is not None
 
     # ── users ────────────────────────────────────────────────────────────
 
@@ -399,7 +422,7 @@ class Auth:
             raise AuthError("malformed token")
 
         row = self._db.execute(
-            """SELECT name, secret_hash, scopes, expires_at, revoked_at
+            """SELECT name, secret_hash, scopes, expires_at, revoked_at, last_used
                  FROM api_tokens WHERE id = ?""",
             (token_id,),
         ).fetchone()
@@ -412,8 +435,24 @@ class Auth:
         if row["expires_at"] is not None and now > row["expires_at"]:
             raise AuthError("token expired")
 
-        self._db.execute("UPDATE api_tokens SET last_used = ? WHERE id = ?", (now, token_id))
-        self._db.commit()
+        # Throttled, and never fatal. Updating last_used on every request put a
+        # write -- and therefore a write lock -- on the path of every read: a
+        # dashboard poll and a telemetry batch would contend for it, and under
+        # a burst of batches the hub raised "database is locked" while
+        # authenticating a request it could otherwise have served.
+        #
+        # LAST_USED_RESOLUTION is all the precision this needs: the question it
+        # answers is "is this token still in use", not "when exactly".
+        stale = (row["last_used"] or 0.0) < now - LAST_USED_RESOLUTION
+        if stale:
+            try:
+                self._db.execute(
+                    "UPDATE api_tokens SET last_used = ? WHERE id = ?", (now, token_id)
+                )
+                self._db.commit()
+            except sqlite3.OperationalError:
+                # Bookkeeping must not turn a valid credential into a failure.
+                log.debug("could not update last_used for token %s", token_id)
         return Identity(
             kind="machine",
             id=token_id,
