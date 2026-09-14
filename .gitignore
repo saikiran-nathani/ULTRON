@@ -59,7 +59,16 @@ var/
 *.db
 *.db-wal
 *.db-shm
-heartbeat*
+# Anchored to the repo root. This was `heartbeat*`, which is unanchored and so
+# matched at EVERY level -- including src/trainwatch/heartbeat.py, a source
+# module that src/trainwatch/__init__.py imports. That file was therefore never
+# committed, and `import src.trainwatch` failed on any fresh clone. Nothing
+# caught it because nobody had cloned fresh; CI found it on its first run.
+#
+# It was also redundant: the heartbeat file lives at var/heartbeat, and var/ is
+# already ignored two lines above. Kept anchored anyway, for a heartbeat file
+# written to the repo root by an explicit TRAINWATCH_HEARTBEAT.
+/heartbeat*
 logs/
 .env
 .env.local
