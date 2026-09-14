@@ -44,10 +44,10 @@ module.exports = function (pres, T) {
       "sudo ubuntu-drivers autoinstall && sudo reboot",
       "nvidia-smi        # RTX 3050, 4096MiB",
       "",
-      { t: "# 2. Build tools + environment", c: C.moss },
-      "sudo apt install -y build-essential git",
-      "conda create -n ultron python=3.11 -y",
-      "conda activate ultron",
+      { t: "# 2. Build tools — gcc is NOT optional (Triton JITs)", c: C.moss },
+      "sudo apt install -y build-essential git tmux",
+      "curl -LsSf https://astral.sh/uv/install.sh | sh",
+      "uv venv --python 3.12 .venv && source .venv/bin/activate",
       "",
       { t: "# 3. Torch — CUDA runtime ships INSIDE the wheel", c: C.moss },
       "pip install torch --index-url \\",
@@ -64,7 +64,7 @@ module.exports = function (pres, T) {
     T.grid(s, 1.62, [
       ["Linux buys you ~0.5–1 GB of VRAM", "Windows' desktop compositor held 500–1000 MB permanently — 12–25% of a 4GB card. With the display on the integrated Radeon, idle dGPU usage is single-digit MB. That reclaimed headroom is what makes 1.5B comfortable.", C.moss],
       ["You do NOT need the CUDA Toolkit", "PyTorch's wheels bundle their own CUDA runtime; only the DRIVER is system-wide. Most guides tell you to install the full toolkit — a large download you do not need.", C.moss],
-      ["Unsloth is not optional here", "On 4GB it is the difference between 1.5B training and 1.5B OOM-ing. Roughly 2x faster and ~50% less VRAM. Triton (its dependency) is native on Linux.", C.moss],
+      ["Unsloth: measured, not assumed", "1.5B at seq512 batch1 trains WITHOUT it — 2,239 MiB, 580 tok/s (2026-08-23). Its real value is the fused cross-entropy that never materializes the fp32 logits tensor. Unmeasured here: Triton needs a C compiler.", C.amber],
       ["16GB system RAM is the real ceiling", "You hit host-RAM limits during dataset loading long before VRAM limits. Stream, don't load. Keep 16GB of swap.", C.amber],
     ], { cols: 1, x: 7.3, w: 5.45, h: 1.04, gapY: 0.11 });
     T.num(s);
@@ -80,23 +80,23 @@ module.exports = function (pres, T) {
     T.table(s, 2.05,
       ["Setup", "Idle VRAM held", "Usable for training", "Notes"],
       [
-        ["Windows 11 + browser open", "500–1000 MB", "~3.0–3.5 GB", "DWM compositor + browser GPU process"],
-        ["Ubuntu, desktop on dGPU", "150–300 MB", "~3.7 GB", "avoid this — no reason to drive the display from the 3050"],
-        ["Ubuntu, hybrid (display on iGPU)", "5–20 MB", "~3.95 GB", "the default. This is what you want."],
-        ["Ubuntu, TTY only (Ctrl+Alt+F3)", "~5 MB", "~3.95 GB", "marginal further gain; useful for the longest runs"],
+        ["Windows 11 + browser open", "500–1000 MiB", "~3,100–3,600 MiB", "DWM compositor + browser GPU process"],
+        ["Ubuntu, desktop on dGPU", "150–300 MiB", "~3,800 MiB", "avoid this — no reason to drive the display from the 3050"],
+        ["Ubuntu, hybrid — MEASURED 2026-08-23", "47 MiB", "3,770 MiB (torch)", "the number to budget against. 4,096 total; the display reserves the rest."],
+        ["…of which practically allocatable", "—", "3,174–3,584 MiB", "moves with desktop use. Budget the FLOOR, not the peak."],
       ],
       [3.9, 2.3, 2.7, 3.3], { size: 11, rowH: 0.42 });
     T.codeBlock(s, 0.55, 4.3, 7.4, 1.35, [
       { t: "# Verify before every long run", c: C.moss },
       "nvidia-smi --query-gpu=memory.used,memory.total --format=csv",
-      { t: "# want single-digit MB used, not 600", c: C.amber },
+      { t: "# measured 2026-08-23: 47 MiB held, 3770 usable", c: C.amber },
     ]);
     T.grid(s, 4.3, [
       ["Stay in Hybrid mode", "Do NOT switch to dGPU-only. Hybrid is what keeps the 3050 free.", C.moss],
       ["The budgets assume a clean card", "Every VRAM table in this deck assumes hybrid mode.", C.amber],
     ], { cols: 1, x: 8.15, w: 4.6, h: 0.62, gapY: 0.11 });
     T.fieldNote(s, 0.55, 5.85, 12.2, 0.95,
-      "This is not a micro-optimization. On a 24GB card nobody would notice; on 4GB it is the difference between 1.5B being marginal and being routine.");
+      "Always reason in MiB — nvidia-smi and torch both report MiB, and 3,770 MiB is 3.68 GiB but 3.95 GB. Mixing the units is how a budget quietly gains 300 MiB it does not have.");
     T.num(s);
   }
 
@@ -105,8 +105,8 @@ module.exports = function (pres, T) {
     const s = T.slide("Setup", "The Mac — your workshop");
     T.codeBlock(s, 0.55, 1.35, 6.5, 4.5, [
       { t: "# 1. Environment", c: C.moss },
-      "conda create -n ultron python=3.11 -y",
-      "conda activate ultron",
+      "uv venv --python 3.12 .venv",
+      "source .venv/bin/activate",
       "",
       { t: "# 2. Torch (MPS backend ships by default)", c: C.moss },
       "pip install torch",
@@ -231,7 +231,7 @@ module.exports = function (pres, T) {
       ],
       [3.2, 1.9, 3.0, 4.1], { size: 10.5, rowH: 0.355 });
     T.grid(s, 5.28, [
-      ["The 512GB rule", "The Asus root SSD holds the OS and conda envs — nothing else. Every large path points at /data.", C.moss],
+      ["The 512GB rule", "The Asus root SSD holds the OS, the venv and the repo — nothing else. Every large path points at /data, which is the 1TB ext4 (916 G, reformatted 2026-08-23).", C.moss],
       ["The rule", "Anything regenerable in under an hour gets deleted. Anything that took a day to produce gets kept forever.", C.moss],
       ["The trap", "Merged models. Large, and a pure function of adapter + base. Never store them.", C.rust],
     ], { cols: 3, h: 1.15 });

@@ -186,7 +186,7 @@ module.exports = function (pres, T) {
   /* ---- Memory math ---- */
   {
     const s = T.slide("SFT", "The memory math — your 4GB budget, line by line",
-      "Assumes Ubuntu in hybrid mode: the display runs on the integrated Radeon, so the 3050 is yours.");
+      "Measured ceiling: 79 MB held at idle, ~3.87 GB free — but it moves with desktop use, so budget the 3.1 GiB floor.");
     T.table(s, 1.62,
       ["Component", "Formula", "0.5B QLoRA", "1.5B QLoRA"],
       [
@@ -198,7 +198,7 @@ module.exports = function (pres, T) {
         ["CUDA context + fragmentation", "fixed overhead", "0.50 GB", "0.50 GB"],
         ["Desktop compositor", "0 on Linux — was 0.5–1.0 on Windows", "0.00 GB", "0.00 GB"],
         ["TOTAL", "", "~1.2 GB", "~2.2 GB"],
-        ["Headroom of the 3.95 GB usable", "", "2.75 GB — raise batch", "1.75 GB — raise seq_len"],
+        ["Headroom — budget the 3.1 GiB FLOOR, not the peak", "", "2.1 GB — raise batch", "1.1 GB — raise seq_len"],
       ],
       [4.0, 3.4, 2.4, 2.4], { size: 10.5, rowH: 0.345 });
     T.banner(s, 5.25, "Activations dominate and they scale with seq_len x batch_size. Cut sequence length before you cut model size.", C.moss);

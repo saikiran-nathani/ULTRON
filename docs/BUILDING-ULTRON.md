@@ -85,7 +85,7 @@ exists because skipping it silently corrupts every number after it.
     - [Step 12.4 — Open the test split. Once.](#step-124--open-the-test-split-once)
 - [Appendix A — Daily working rhythm](#appendix-a--daily-working-rhythm)
 - [Appendix B — Where to look when it breaks](#appendix-b--where-to-look-when-it-breaks)
-- [Appendix C — Corrections to `TUF/STATUS.md` worth acting on](#appendix-c--corrections-to-tufstatusmd-worth-acting-on)
+- [Appendix C — Where the TUF differs from the docs](#appendix-c--where-the-tuf-differs-from-the-docs)
 
 ---
 
@@ -183,7 +183,7 @@ deck's 6-12 h compute-budget table. Size the generation set against the measured
 
 **Why:** your checked-out `master` is **7 commits behind `integration/tuf-merge`**, which already
 contains ~1,700 lines of working, tested Python. Building on `master` would mean rewriting a
-sandbox that already passes 19 adversarial tests.
+sandbox that already passes 23 adversarial tests.
 
 ### Step 1.1 — See the divergence for yourself
 
@@ -280,11 +280,22 @@ succeeds, and `git rev-list --count master...origin/integration/tuf-merge` print
 saves two days later.
 
 **Standard:** `uv` + venv + **Python 3.12** on both machines. Not conda — the `requirements/`
-split assumes pip. Not 3.14 — bitsandbytes and unsloth may have no wheels for it, forcing source
-builds on the machine least able to afford them.
+split assumes pip. **Not 3.14** — bitsandbytes and unsloth have no wheels for it, which forces
+source builds on the machine least able to afford them.
 
-> `CLAUDE.md` §9 still says conda + 3.11. It is stale; this document supersedes it. Fix §9 when
-> you next touch that file.
+> **Two true facts that look contradictory.** `TUF/STATUS.md` records that Ubuntu 26.04 ships
+> *only* `python3.14` — 3.11/3.12/3.13 are not in the archive. That is correct, and it is also
+> irrelevant here: **`uv` downloads and manages its own Python builds**, so `uv venv --python 3.12`
+> works on a machine whose `apt` has no 3.12. The archive constrains `apt`, not `uv`.
+>
+> Settled by the environment build on 2026-08-23 (`CLAUDE.md` "The environment"): the venv runs
+> 3.12.14 and the whole measured stack — torch 2.11.0+cu128, transformers 4.57.6, trl 0.24.0,
+> peft 0.20.0, bitsandbytes 0.50.1 — is verified on it.
+
+⚠️ **`cuda.txt` protects `torch` from the PyPI CPU wheel, but not `torchvision`.** torchvision
+resolves to the plain PyPI build, whose compiled ops will not load against `torch+cu128` — and
+unsloth then fails to import with `operator torchvision::nms does not exist`. Reinstall it from
+the cu128 index every time you rebuild the venv.
 
 ### Step 2.1 — Install uv (both machines)
 
@@ -337,6 +348,30 @@ This script already exists and detects which machine it is on. On the Mac it ass
 bitsandbytes and unsloth.
 
 **Done when:** exit code 0 on both machines. Do not proceed on a partial pass.
+
+### ⚠️ Step 2.5 — The green-gate trap: `ok unsloth` does not mean unsloth works
+
+`smoke_test.py` reports **`ok unsloth`** on a box where unsloth **cannot train at all**.
+
+`import unsloth` succeeds because Triton compiles its kernels **lazily, at the first training
+step** — not at import. With no C compiler installed you get a clean green gate, then, minutes
+into your first real run:
+
+```
+RuntimeError: Failed to find C compiler. Please specify via CC environment variable
+```
+
+Verified directly on the TUF, 2026-08-23. Install the compiler as part of the environment, not
+as a reaction:
+
+```bash
+sudo apt install -y build-essential tmux
+```
+
+This generalises past unsloth: **an import check proves the import, nothing more.** Anything
+that JIT-compiles, downloads weights, or opens a device on first use will pass a smoke test and
+fail in production. The ten-step canary in Step 7.4 exists for exactly this class of failure —
+it is the cheapest thing that exercises the real path.
 
 **If bitsandbytes fails:** `python -m bitsandbytes` prints a real diagnostic. Almost always a
 version mismatch against torch's CUDA build — reinstall bitsandbytes *after* torch, never before.
@@ -393,11 +428,11 @@ Two design decisions worth internalising, because you will be tempted to undo bo
 python -m pytest src/sandbox/tests/test_adversarial.py -v
 ```
 
-**Expected:** 19 passed. Fork bomb, memory bomb, orphan subprocess, process-group escape,
+**Expected:** 23 passed. Fork bomb, memory bomb, orphan subprocess, process-group escape,
 `SystemExit` swallowing, reading the test file, network egress, filesystem escape, disk fill,
 env scrubbing, traceback capture.
 
-**Done when:** 19/19 green on the machine you will actually run bulk execution on.
+**Done when:** 23/23 green on the machine you will actually run bulk execution on.
 
 ### Step 3.3 — Know the one platform difference
 
@@ -426,7 +461,7 @@ That gradient is what makes GRPO learnable.
 
 **Goal:** verify the code you did not write, and apply four fixes it needs.
 
-**Why:** `TUF/STATUS.md` reports "19/19 green" — true, **on Linux**. Run the same suite on the
+**Why:** the suite was reported green — true, **on Linux**. Run the same suite on the
 Mac and you get **1 passed, 17 failed**. Three further defects are invisible to the existing
 suite. The executor becomes your GRPO reward function, so each of these silently corrupts every
 number downstream.
@@ -553,8 +588,9 @@ has not solved anything.
 python -m pytest src/sandbox/tests/test_adversarial.py -q --deselect src/sandbox/tests/test_adversarial.py::test_fork_bomb_is_contained
 ```
 
-**Expected on the Mac:** 17 passed, 1 failed (the memory bomb — Fix 3, unavoidable here).
-**Expected on the TUF:** 19 passed. Run the full suite there, including the fork bomb.
+**Expected on the Mac:** 21 passed, 1 failed (the memory bomb — Fix 3, unavoidable here).
+**Expected on the TUF:** 23 passed, all green (verified 2026-08-23). Run the full suite there,
+including the fork bomb.
 
 > ⚠️ **Do not run the fork-bomb test on the Mac.** It sizes `nproc` from
 > `current_user_threads()`, which reads `/proc` — absent on macOS, so it falls back to **4096**
@@ -585,7 +621,7 @@ call. It cannot fake a pass, so it is a correctness wart rather than a security 
 the namespace per test would be correct but costs real time on millions of executions. Left as is
 — be aware it exists if a dense reward ever looks strange.
 
-**Done when:** 17/18 on the Mac, 19/19 on the TUF, and the three-line flag check above prints
+**Done when:** 21/22 on the Mac, 23/23 on the TUF, and the three-line flag check above prints
 exactly the expected output.
 
 ---
@@ -1092,7 +1128,61 @@ optim = "paged_adamw_8bit"
 #   PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 ```
 
-Starting geometry for 0.5B: `seq_len 1024`, `per_device_batch 2`, `grad_accum 8`.
+### ⚠️ Starting geometry — measured, and not what the docs said
+
+**Use `seq_len 1024`, `per_device_batch 1`, `grad_accum 16`.**
+
+Not `1024 x 2 x 8`. That geometry — which this guide and `CLAUDE.md` §2 both recommended, and
+which I recommended when you picked the student model — **OOMs on this box.** Measured
+2026-08-23, `results/00-hardware-capacity.md`:
+
+| Config | tok/forward | fp32 logits | peak | tok/s | |
+|---|---:|---:|---:|---:|---|
+| 0.5B s512 b1 a16 | 512 | 0.29 G | 1,473 MiB | 1,295 | ✓ |
+| 0.5B s1024 **b2** a8 | 2048 | 1.16 G | — | — | **OOM** |
+| **0.5B s1024 b1 a16** | 1024 | 0.58 G | 2,406 MiB | **1,391** | ✓ **the workhorse** |
+| 0.5B s2048 b1 a16 | 2048 | 1.16 G | — | — | **OOM** |
+| 1.5B s512 b1 a16 | 512 | 0.29 G | 2,239 MiB | 580 | ✓ *without unsloth* |
+| 1.5B s1024 b1 a16 | 1024 | 0.58 G | 3,215 MiB | 617 | ✓ |
+
+Both geometries give the same effective batch of 16. One works and one doesn't.
+
+### Why: the binding constraint is the logits tensor, not the model
+
+Qwen's vocabulary is **151,936** and the loss upcasts logits to fp32, so a single tensor of
+`vocab x tokens_per_forward x 4 bytes` sits on the card:
+
+```
+2048 tok/forward  ->  1.16 GiB     <- both OOM rows; matches "Tried to allocate 1.16 GiB" exactly
+1024 tok/forward  ->  0.58 GiB
+ 512 tok/forward  ->  0.29 GiB
+```
+
+That is why a **0.5B** model OOMs at a geometry where a **1.5B** model succeeds. `1024x2` and
+`2048x1` both push 2,048 tokens through one forward; `1.5B s1024 b1` pushes 1,024. Halving batch
+while holding `seq_len` fixed is what makes it fit — and it turns in the *best* throughput in the
+sweep.
+
+**Three consequences for every config you write:**
+
+1. **`seq_len x batch` is the number to keep under ~1024** — not `seq_len` alone.
+2. **Raising batch is not free here.** On a big card batch is the cheap knob; on 4 GB it is
+   exactly as expensive as `seq_len`, because they multiply into the dominant term.
+3. **`CLAUDE.md` §7's OOM playbook is half right.** "Lower seq_len (biggest lever)" is true but
+   incomplete — batch is the *same* lever, and dropping to `batch=1` with a raised `grad_accum`
+   belongs next to step 2, not at step 6. It is free: effective batch is preserved.
+
+Also counter-intuitive: **throughput is not monotonic in `seq_len`.** `s512` gives 1,295 tok/s,
+`s1024` gives 1,391 — the longer context is *faster per token*, because fixed per-step overhead
+amortizes over more tokens. Don't pick 512 thinking it is cheaper; it is cheaper only in memory,
+and slower per token of training signal.
+
+> **`1.5B s512 b1 a16` runs fine without unsloth** — 2,239 MiB, 580 tok/s. `CLAUDE.md` §3 says
+> unsloth is non-negotiable at 1.5B; measurement says that is not true for *fitting*. The likely
+> explanation is that §2's table was derived with unsloth, whose fused cross-entropy never
+> materializes the fp32 logits tensor. That arm is **not yet measured** — no C compiler on the
+> box, and Triton JIT-compiles unsloth's kernels at the first step. See "the green-gate trap"
+> below.
 
 ### Step 7.2b — Wire in trainwatch
 
@@ -1175,9 +1265,26 @@ export PATH="$PWD/scripts:$PATH"
 
 ### Step 7.3 — ⚠️ Loss masking — the bug that silently wastes a week
 
-You must train on the **completion only**, not the prompt. TRL's
-`DataCollatorForCompletionOnlyLM` needs a response template — and the template must tokenize
-**identically in context** as it does standalone. For Qwen's ChatML this is a real hazard:
+You must train on the **completion only**, not the prompt.
+
+> **The mechanism changed; the trap did not.** This step used to document
+> `DataCollatorForCompletionOnlyLM`. **That class does not exist in `trl` 0.24.0** — it was
+> removed during the 0.2x line, verified against the installed package on 2026-08-23. Masking
+> now goes through `SFTConfig(assistant_only_loss=True)`, which requires a chat template
+> carrying `{% generation %}` markers.
+
+```python
+from trl import SFTConfig
+
+args = SFTConfig(
+    assistant_only_loss=True,   # replaces DataCollatorForCompletionOnlyLM
+    ...,
+)
+```
+
+**Why this is still the most dangerous step in the phase.** Whatever the mechanism, masking is
+matched against tokenized text, and for Qwen's ChatML the same visible string tokenizes three
+different ways depending on what precedes it:
 
 | String | Token ids |
 |---|---|
@@ -1185,8 +1292,12 @@ You must train on the **completion only**, not the prompt. TRL's
 | `\n<\|im_start\|>assistant` | `[198, 151644, 77091]` |
 | `<\|im_start\|>assistant\n` | `[151644, 77091, 198]` |
 
-A leading newline changes the id sequence, the collator finds no match, **no masking is applied**,
-and the model trains on prompts as if they were answers. Loss looks fine. Eval never moves.
+A leading newline changes the id sequence, the match fails, **no masking is applied**, and the
+model trains on prompts as if they were answers. Loss looks fine. Eval never moves. With
+`assistant_only_loss` the equivalent failure is a chat template with no `{% generation %}`
+markers — silent in exactly the same way.
+
+Which is why the verification below matters more than the API does.
 
 **Verify masking directly — do not assume:**
 
@@ -1696,6 +1807,88 @@ Reference numbers measured on your own hardware, same 1.5B Q4_K_M model on both 
 Treat prefill as a range, not a point — it is batch-parallel and swings non-monotonically with
 prompt size on both machines. **Decode is the reproducible number; quote that one.**
 
+The full TUF sweep, from `src/serve/README.md`:
+
+Re-measured 2026-08-23 across all four project models (`results/00-hardware-capacity.md`,
+raw data in `results/serving-tuf.json`):
+
+| Model | VRAM | Decode | TTFT | Prefill @5k | Max ctx, full offload |
+|---|---:|---:|---:|---:|---:|
+| 0.5B Q4_K_M | 553 MiB | 238.0 tok/s | 247 ms | 9,567 tok/s | 32,768 |
+| **1.5B Q4_K_M** — ship target | 1,297 MiB | **115.0 tok/s** | 253 ms | 3,975 tok/s | 32,768 |
+| 1.5B Q8_0 | 1,927 MiB | 89.0 tok/s | 259 ms | 4,232 tok/s | 32,768 |
+| 3B Q4_K_M ⚠️ | 2,291 MiB | 71.8 tok/s | 268 ms | 2,193 tok/s | **16,384** |
+
+**The ship target reproduces:** 115.0 tok/s against 116.4 five days earlier — within noise. VRAM
+came in at 1,297 MiB against the 1,394 MiB in `CLAUDE.md` §5, so that figure is ~100 MiB
+pessimistic.
+
+**Q8_0 costs 23% of decode for 630 MiB and buys nothing measurable.** Note prefill *rises*
+slightly (3,975 → 4,232) — the expected shape, since prefill is compute-bound and dequantizing
+Q4 to matmul is overhead you stop paying at Q8. Q4_K_M stays the ship format.
+
+Three things fall out of that table that are not obvious from it:
+
+- **Q4_K_M beats Q8_0 on decode by 20–28% but *loses* 3.9% on prefill.** Decode is
+  bandwidth-bound (fewer bytes per weight wins); prefill is compute-bound, where dequantizing is
+  pure overhead. A single "tokens/sec" figure averages these and hides the trade that decides
+  your serving format.
+- **TTFT barely moves with model size** — 263 ms at 1.5B, 267 ms at 3B. A 2× parameter increase
+  costs 4 ms, because TTFT is dominated by fixed request overhead. For autocomplete this is *the*
+  number, and it says the bigger model feels identically responsive.
+- **F16 at 1.5B does not fit.** 2,950 MiB of weights alone, leaving nothing for KV cache. Q8_0 is
+  the near-lossless point; F16 buys nothing measurable and costs ~45% of decode.
+
+### Step 12.3a — ⚠️ Silent partial offload: the trap that reads as "slow hardware"
+
+**When a model plus its KV cache does not fit, ollama does not fail.** It leaves some layers on
+the CPU and serves anyway. Measured on the TUF, same model, same prompt:
+
+| | Decode |
+|---|---:|
+| Full offload | **116 tok/s** |
+| Partial offload (2/29 layers on GPU) | **24 tok/s** |
+
+No error. Nothing in the response body. A 5× slowdown that reads as *"this hardware is slow"*
+rather than *"this did not fit"* — and you will believe the wrong one, because the wrong one is
+the more available explanation.
+
+`bench_serving.py` already guards this: `/api/ps` reports `size` and `size_vram`, and their ratio
+is the portable equivalent of llama.cpp's `offloaded N/M layers` (it works on Metal too). Every
+sample is tagged with the ratio, degraded samples are marked `[DEGRADED]` rather than averaged
+into a clean-looking mean, and the process exits non-zero so it fails CI instead of quietly
+publishing a bad number.
+
+Two habits follow:
+
+- **Measure one model at a time.** With several resident on 4 GB, a load gets squeezed by whatever
+  is already there and results start depending on the order you ran them in.
+- **Never quote a decode figure without its offload ratio.**
+
+### Step 12.3b — ⚠️ The context ceiling is not derivable from file size
+
+KV cache grows linearly with context, and on a 4 GB card it — not the weights — is what pushes
+you over. Measured, Qwen2.5-Coder-3B Q4_K_M on the TUF:
+
+| Context | Offload | VRAM | Decode |
+|---:|---:|---:|---:|
+| 4,096 | 1.000 | 2,059 MiB | 64.5 tok/s |
+| 8,192 | 1.000 | 2,207 MiB | 64.1 tok/s |
+| 16,384 | 1.000 | 2,503 MiB | 59.8 tok/s |
+| 32,768 | **0.814** | 2,570 MiB | 43.7 tok/s ⚠️ |
+
+**3B on the TUF is a 16K-context model, not a 32K one.** Configuring it for 32K costs about a
+third of decode — and with a genuinely long prompt it is far worse: a 20k-token prompt at 32K
+context measured **9.4 tok/s**, roughly 6.6× slower than the same model configured correctly.
+
+Run `--ctx-ceiling` to find it; it walks a ladder upward and stops at the first context that
+fails to fully offload. Do not estimate it from the GGUF's size.
+
+> ⚠️ **Do not reuse these numbers for GRPO rollout budgeting.** They are llama.cpp unbatched via
+> ollama, which is substantially faster than HF `generate` — and GRPO generates through HF, not
+> llama.cpp. Using 116 tok/s to size a rollout budget will make Phase 7 look far cheaper than it
+> is. `TUF/02-CAPACITY.md` flags the same thing.
+
 ### Step 12.4 — Open the test split. Once.
 
 You froze it in Step 5.1 and have not looked at it since. Open it now, run the final evaluation,
@@ -1751,18 +1944,50 @@ recreated from `requirements/`.
 
 ---
 
-# Appendix C — Corrections to `TUF/STATUS.md` worth acting on
+# Appendix C — Where the TUF differs from the docs
 
-The TUF session measured three things that differ from what the docs assume. Fix them before
-training, because each silently changes your numbers:
+`TUF/STATUS.md` is the authority on the machine's real state; this is the short version, kept
+current because each of these silently changes your numbers.
 
-| Item | Documented assumption | Measured on the TUF | Action |
+## Still open — fix before training
+
+| Item | Documented assumption | Measured | Action |
 |---|---|---|---|
-| Display GPU | `display_active: Disabled`, 5–20 MiB idle | **`Enabled`, 79 MiB used** | Confirm the desktop renders on the Renoir iGPU (`glxinfo \| grep "OpenGL renderer"`). 79 MiB is still far better than Windows' 500–1000 MB, but it is not the ideal case the memory tables assume. |
-| Swap | 16 G | **4 G**, 1.5 G already in use | Enlarge it. On 14 Gi usable RAM this is what turns an OOM-kill into a slowdown. |
-| `/data` | ext4, mounted by UUID at `/data` | **NTFS** at `/run/media/.../Storage` | Reformat to ext4 and mount at `/data`. On NTFS the HF cache cannot use symlinks and silently doubles disk usage per model; conda/pip hardlinks break too. `docs/WINDOWS-TO-UBUNTU.md` Step 6 covers this. |
-| Usable RAM | 16 GB | **14 Gi** (iGPU reserves ~2 GB) | Plan dataset streaming against 14, not 16. |
+| **Swap** ⚠️ | 16 G | **still 4 G — the capacity sweeps drove it to 2.8 G used** (2026-08-23) | **Now urgent, not cosmetic.** A 1.5B run plus a browser hits the wall. Item 4 on the `STATUS.md` work queue. |
+| **Usable VRAM** | 4,096 MiB | **3,770 MiB** reported by torch (2026-08-23) | Not in any doc before now. Every headroom sum written against 4,096 is ~326 MiB too generous. |
+| **Display GPU** | `display_active: Disabled`, 5–20 MiB idle | `Enabled`, **47 MiB** idle (2026-08-23) | Improved from the 79 MiB `STATUS.md` recorded. Not worth chasing further. |
+| **Usable RAM** | 16 GB | **14 Gi** — the iGPU reserves ~2 GB | Plan dataset streaming against 14, not 16. |
 
-**Also stale, lower priority:** `CLAUDE.md` §9 prescribes conda + Python 3.11 (this guide uses
-uv + 3.12); `OUTLINE.md` and `CLAUDE.md` say 190 slides where the built deck has 191; the deck's
+## Resolved
+
+| Item | Was | Now |
+|---|---|---|
+| **`/data`** | NTFS at `/run/media/.../Storage`; `/data` was a plain directory on the 512 GB root | ✅ **Reformatted to ext4 2026-08-23.** 916 G (907 G free), in `/etc/fstab` by UUID, `noatime,nofail`. `HF_HOME=/data/hf` lands on the 1 TB as originally designed. NTFS was kept at first and *did not survive contact* — the dirty bit dropped the volume on every reboot. |
+| **Repo on NTFS** | Working copy lived on the NTFS volume; git degraded | ✅ **Canonical checkout is `~/projects/ULTRON` on ext4.** Three stale duplicates removed after confirming they were contained in `origin/master`. |
+| **Python version** | This guide said 3.12 | ✅ **3.14.** Ubuntu 26.04 ships only `python3.14`; the stack was verified on it. See Part 2. |
+
+Two operational lessons from the reformat, worth carrying to any machine:
+
+- **`findmnt -no SOURCE /boot/efi` before wiping any disk.** On this box `/boot/efi` sits on
+  `nvme1n1p1` — the 512 GB *root*, not the 1 TB — so the device names are the reverse of what you
+  would guess. Match on size and model, never on device name.
+- **`mkdir` the mountpoint, `chown` only after mounting.** That leaves the underlying `/data`
+  directory root-owned, so a failed mount gives permission-denied instead of silently filling the
+  OS disk with model downloads. A loud fast failure beats a quiet slow one.
+
+## Also stale, lower priority
+
+`OUTLINE.md` and `CLAUDE.md` say 190 slides where the built deck has 191. The deck's
 compute-budget table says 6–12 h for teacher generation against ~21 h measured.
+
+**The deck source is updated but not rebuilt.** `docs/sections/02-environment.js` and
+`07-sft.js` now carry the measured VRAM (3,770 MiB), the uv+3.12 environment, and the corrected
+unsloth claim — but the committed `.pptx` still shows the old numbers until someone runs:
+
+```bash
+cd docs && node build.js
+```
+
+Still to fold into the deck from `results/00-hardware-capacity.md`: the fp32-logits finding and
+the corrected `1024 x 1 x 16` geometry belong on slide 92's memory-math table, which currently
+implies `1024 x 2` is fine.
