@@ -183,6 +183,43 @@ def _notify(title: str, body: str) -> bool:
         return False
 
 
+def _descriptors() -> str:
+    """The hub's open descriptor count, for the log line.
+
+    Recorded on every probe because the descriptor leak that took this service
+    down is **not fully diagnosed**. The pools were made weak-referencing and
+    the ceiling raised from 256 to 4096, which turned ~6 hours into ~12, but
+    measurement showed the count still trending up and the mechanism is still
+    unknown.
+
+    So rather than argue about it, sample it. The probe already runs every five
+    minutes; adding one number per line turns an open question into a dataset —
+    `grep fds= var/probe.log` gives the trend over days, which is the only
+    thing that can settle whether it plateaus or climbs.
+
+    Best-effort: a monitor must never fail because a diagnostic did.
+    """
+    try:
+        out = subprocess.run(
+            ["/bin/launchctl", "list", "com.trainwatch.hub"],
+            capture_output=True, text=True, timeout=5, check=False,
+        ).stdout
+        pid = ""
+        for line in out.splitlines():
+            if '"PID"' in line:
+                pid = "".join(c for c in line.split("=")[-1] if c.isdigit())
+        if not pid:
+            return "fds=?"
+        listed = subprocess.run(
+            ["/usr/sbin/lsof", "-p", pid], capture_output=True, text=True, timeout=20, check=False
+        ).stdout.splitlines()
+        total = max(0, len(listed) - 1)
+        db = sum(1 for line in listed if "trainwatch.db" in line)
+        return f"fds={total} db={db}"
+    except Exception:
+        return "fds=?"
+
+
 def _log(line: str) -> None:
     LOG.parent.mkdir(parents=True, exist_ok=True)
     stamp = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -201,13 +238,16 @@ def run_once(*, quiet: bool = False) -> int:
             _log(f"RECOVERED {base} — {reason}")
             _notify("trainwatch hub recovered", f"{base}\n{reason}")
         _save_state({"failures": 0, "last_ok": time.time(), "last_reason": reason})
+        # Logged on success too, not only on failure: the trend is the point,
+        # and a series with only the bad samples in it cannot show a trend.
+        _log(f"ok {base} — {reason} [{_descriptors()}]")
         if not quiet:
             print(f"ok   {base}  {reason}")
         return 0
 
     streak += 1
     _save_state({"failures": streak, "last_fail": time.time(), "last_reason": reason})
-    _log(f"FAIL ({streak}) {base} — {reason}")
+    _log(f"FAIL ({streak}) {base} — {reason} [{_descriptors()}]")
     if not quiet:
         print(f"FAIL {base}  {reason}  (consecutive: {streak})", file=sys.stderr)
 
