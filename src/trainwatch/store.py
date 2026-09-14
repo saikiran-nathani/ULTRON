@@ -506,12 +506,121 @@ def _m005_lineage(db: sqlite3.Connection) -> None:
 
 # (user_version, name, apply). Append only; never renumber or edit a shipped
 # entry -- a database in the wild has already recorded that it ran.
+def _m006_sync(db: sqlite3.Connection) -> None:
+    """Per-record sync: devices, records, an append-only log, and a sequence.
+
+    Stage 3a of the one-interface plan. The design is decided by one number:
+    the whole dataset is ~38 KB. Bandwidth, storage and compute are therefore
+    free, and the only scarce resource is correctness — so this schema is built
+    for recoverability rather than efficiency. Every version of every record is
+    kept forever, including the losers, and it will still never reach a
+    gigabyte.
+
+    Four things in here are load-bearing, and each prevents a specific silent
+    data loss.
+
+    **`seq` and `hlc` are different columns doing different jobs.**
+    `seq` is assigned by the server on accept and is the *delivery* order: a
+    client pulls "everything above my cursor". `hlc` comes from the writer and
+    is the *conflict* order: which of two versions of one record wins. Using
+    the HLC as the cursor means a record written on a slow-clocked device
+    lands below a client's cursor and is never delivered to that client again
+    — not on the next sync, not on any sync. Permanent, silent, and looks like
+    "I must have forgotten to add it". See `hlc.py`.
+
+    **`owner_id` is in the primary key from the first migration that has one.**
+    There is one human today. Adding it now is thirty lines; adding it later is
+    a table rebuild plus a data migration on live, already-diverged data.
+
+    **Deletes are tombstones, not deletions.** A row with `deleted=1` and a
+    NULL body. A device that has not synced since before the delete still
+    holds the record; without a tombstone to receive, it re-pushes it on
+    reconnect and the delete un-happens. Which is why `sync_devices` tracks
+    `last_pull_seq` and `retired_at`: the only safe GC watermark is
+    `min(last_pull_seq)` across non-retired devices, and without a way to
+    retire a device, a phone replaced in 2027 pins every tombstone forever.
+
+    **`sync_log` is append-only and records rejections too.** It is the
+    conflict archive, and it is what makes it safe to actually live on this
+    while it is young: a losing version is recoverable, and "finance was
+    replaced by MacBook-Pro at 14:02 — view / restore" is answerable from it.
+    Storing only accepted writes would make a lost edit unrecoverable, which
+    at 38 KB would be a choice rather than a constraint.
+    """
+    db.executescript(
+        """
+        -- One row per device that has ever synced. `last_pull_seq` is the
+        -- tombstone-GC watermark input; `retired_at` is what stops a replaced
+        -- device pinning it forever.
+        CREATE TABLE IF NOT EXISTS sync_devices (
+            id            TEXT NOT NULL,
+            owner_id      INTEGER NOT NULL,
+            name          TEXT NOT NULL DEFAULT '',
+            platform      TEXT NOT NULL DEFAULT '',
+            last_pull_seq INTEGER NOT NULL DEFAULT 0,
+            last_push_hlc TEXT NOT NULL DEFAULT '',
+            first_seen    REAL NOT NULL,
+            last_seen     REAL NOT NULL,
+            retired_at    REAL,
+            PRIMARY KEY (owner_id, id)
+        );
+
+        -- Current state. One row per live record, server-authoritative.
+        CREATE TABLE IF NOT EXISTS sync_records (
+            owner_id   INTEGER NOT NULL,
+            collection TEXT NOT NULL,
+            record_id  TEXT NOT NULL,
+            seq        INTEGER NOT NULL,
+            hlc        TEXT NOT NULL,
+            deleted    INTEGER NOT NULL DEFAULT 0,
+            body       TEXT,
+            device_id  TEXT NOT NULL,
+            updated    REAL NOT NULL,
+            PRIMARY KEY (owner_id, collection, record_id)
+        );
+
+        -- The pull query is `WHERE owner_id = ? AND seq > ? ORDER BY seq`, so
+        -- this index is the whole read path.
+        CREATE INDEX IF NOT EXISTS idx_sync_records_seq
+            ON sync_records (owner_id, seq);
+
+        -- Append-only. Every version, accepted or rejected. The conflict
+        -- archive, and the only thing that makes a lost edit recoverable.
+        CREATE TABLE IF NOT EXISTS sync_log (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            owner_id   INTEGER NOT NULL,
+            collection TEXT NOT NULL,
+            record_id  TEXT NOT NULL,
+            hlc        TEXT NOT NULL,
+            deleted    INTEGER NOT NULL DEFAULT 0,
+            body       TEXT,
+            device_id  TEXT NOT NULL,
+            outcome    TEXT NOT NULL,
+            ts         REAL NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_sync_log_record
+            ON sync_log (owner_id, collection, record_id, id DESC);
+
+        -- The sequence source, per owner. A table rather than a MAX() over
+        -- sync_records, because MAX() would reuse a number after a tombstone
+        -- is collected -- and a reused seq is a record that silently skips
+        -- every client whose cursor is already past it.
+        CREATE TABLE IF NOT EXISTS sync_seq (
+            owner_id INTEGER NOT NULL PRIMARY KEY,
+            next_seq INTEGER NOT NULL DEFAULT 1
+        );
+        """
+    )
+
+
 _MIGRATIONS: tuple[tuple[int, str, Callable[[sqlite3.Connection], None]], ...] = (
     (1, "metrics unique index", _m001_metrics_unique),
     (2, "curriculum progress tables", _m002_curriculum),
     (3, "identity, sessions, tokens, audit chain", _m003_auth),
     (4, "replication cursors and dedupe keys", _m004_replication),
     (5, "experiment lineage", _m005_lineage),
+    (6, "per-record sync: devices, records, log, sequence", _m006_sync),
 )
 
 

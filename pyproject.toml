@@ -38,7 +38,10 @@ ban-relative-imports = "parents"
 
 [tool.ruff.lint.per-file-ignores]
 # S101 assert / S105-6 fake credentials / SLF001 reaching into _db for setup.
-"src/**/tests/*" = ["S101", "S105", "S106", "SLF001"]
+# S311: the sync property tests drive a SEEDED `random.Random` on purpose --
+# a reproducible random walk is the whole technique, and reaching for
+# `secrets` here would make a failure impossible to re-run.
+"src/**/tests/*" = ["S101", "S105", "S106", "SLF001", "S311"]
 # TID252: `from ..store import Store`. The server subpackage is the one place a
 # parent-relative import is right: it is a leaf of trainwatch, not a peer, and
 # an absolute `src.trainwatch.store` would re-couple it to its location.

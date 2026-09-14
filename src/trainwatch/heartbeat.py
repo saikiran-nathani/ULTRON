@@ -11,7 +11,7 @@ Two files are written side by side:
   ``[ $(( $(date +%s) - $(cat /tmp/heartbeat) )) -gt 900 ]``
 * ``<path>.json``  — run id, step and timestamp, for the richer liveness check.
 
-Both are written atomically (write-temp + ``os.replace``), so a reader can never
+Both are written atomically (write-temp + ``Path.replace``), so a reader can never
 observe a half-written file and conclude the run is dead.
 """
 
@@ -24,7 +24,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-__all__ = ["write_heartbeat", "read_heartbeat", "heartbeat_age"]
+__all__ = ["heartbeat_age", "read_heartbeat", "write_heartbeat"]
 
 log = logging.getLogger("trainwatch.heartbeat")
 
@@ -40,7 +40,7 @@ def write_heartbeat(path: str | os.PathLike[str], *, run_id: str = "", step: int
             p.with_suffix(p.suffix + ".json"),
             json.dumps({"ts": now, "run_id": run_id, "step": step}),
         )
-    except Exception:  # noqa: BLE001
+    except Exception:
         log.warning("could not write heartbeat to %s", path, exc_info=True)
 
 
@@ -79,4 +79,4 @@ def heartbeat_age(path: str | os.PathLike[str]) -> float | None:
 def _atomic_write(path: Path, text: str) -> None:
     tmp = path.with_name(f".{path.name}.tmp")
     tmp.write_text(text, encoding="utf-8")
-    os.replace(tmp, path)
+    tmp.replace(path)
