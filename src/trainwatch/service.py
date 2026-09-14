@@ -71,6 +71,14 @@ class Unit:
     name: str
     args: tuple[str, ...]
     description: str
+    #: Megabytes of RSS the unit may use before the kernel kills it.
+    #:
+    #: Bounding this is not about saving memory — it is about which process
+    #: dies when the box is short. The TUF is about to be both the GPU machine
+    #: and the app server against 16 GB, and an unbounded monitoring service
+    #: can become the thing that OOM-kills a six-hour training run. With a
+    #: ceiling, a leak kills the leaker and the kernel picks the right victim.
+    memory_mb: int = 0
 
 
 UNITS: dict[str, Unit] = {
@@ -78,11 +86,18 @@ UNITS: dict[str, Unit] = {
         name="hub",
         args=("serve",),
         description="trainwatch dashboard and hub",
+        # ~14x the measured 35 MB RSS. Generous enough that normal operation
+        # never approaches it, tight enough that the descriptor leak that took
+        # this process down after 6h30m would have been killed and restarted
+        # by the supervisor instead of quietly serving nothing all day.
+        memory_mb=512,
     ),
     "ship": Unit(
         name="ship",
         args=("ship",),
         description="replicate local telemetry to the hub",
+        # A cursor and a batch of rows. It reads, posts, advances.
+        memory_mb=256,
     ),
 }
 
@@ -163,6 +178,12 @@ def _launchd(unit: Unit, *, repo: Path, env: dict[str, str]) -> str:
     <key>SoftResourceLimits</key>
     <dict>
         <key>NumberOfFiles</key><integer>{_MAX_FILES}</integer>
+        <!-- launchd has no MemoryMax. ResidentSetSize is the nearest thing,
+             and it is weaker: it is advisory on macOS rather than a cgroup
+             ceiling, so treat the Linux unit as the one that actually
+             enforces this. Recorded rather than silently omitted, because
+             "the plist sets a memory limit" would otherwise be believed. -->
+        <key>ResidentSetSize</key><integer>{unit.memory_mb * 1024 * 1024}</integer>
     </dict>
     <key>HardResourceLimits</key>
     <dict>
@@ -194,7 +215,12 @@ WorkingDirectory="{repo}"
 ExecStart={argv}
 Restart=on-failure
 RestartSec=5
-LimitNOFILE={_MAX_FILES}{environment}
+# A crash loop that restarts forever hides the bug and fills the disk with
+# logs. Five failures in five minutes and it stays down, visibly.
+StartLimitBurst=5
+StartLimitIntervalSec=300
+LimitNOFILE={_MAX_FILES}
+MemoryMax={unit.memory_mb}M{environment}
 
 [Install]
 WantedBy=default.target

@@ -21,8 +21,10 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import errno
 import json
 import logging
+import os
 import shutil
 import socket
 import subprocess
@@ -72,6 +74,11 @@ STREAM_INTERVAL = 2.0
 # a run that died five minutes ago as healthy. 15s keeps that honest while
 # still cutting an idle tab from 30 pushes a minute to 4.
 STREAM_MAX_IDLE = 15.0
+
+
+# Exit code for descriptor exhaustion. Distinct from 1 so `hub.log` and
+# `launchctl list`'s LastExitStatus say which failure this was.
+EXIT_NO_DESCRIPTORS = 24  # matches errno.EMFILE, for grep-ability
 
 
 class StorePool:
@@ -290,6 +297,30 @@ def create_app(config: Config | None = None) -> FastAPI:
                                 dropped,
                                 cfg.keep_days,
                             )
+                except OSError as exc:
+                    # Descriptor exhaustion is the one error worth dying for.
+                    #
+                    # EMFILE does not crash the process. It leaves it running,
+                    # listening, and unable to allocate a descriptor for an
+                    # accepted socket — so every request is reset while
+                    # launchd reports the job healthy and `KeepAlive` never
+                    # fires. That is how this hub spent 6h30m "up".
+                    #
+                    # A supervisor can restart a process that exits. It cannot
+                    # do anything about one that lingers broken. So exit, and
+                    # let the thing whose job this is do it.
+                    if exc.errno == errno.EMFILE:
+                        log.critical(
+                            "out of file descriptors (%s) — exiting so the supervisor "
+                            "restarts us. A process in this state accepts connections "
+                            "it cannot answer, which is invisible to every on-box check.",
+                            exc,
+                        )
+                        # os._exit, not sys.exit: we are on a worker thread, and
+                        # SystemExit there is caught by the executor and
+                        # discarded. This has to be unconditional.
+                        os._exit(EXIT_NO_DESCRIPTORS)
+                    log.exception("purge failed")
                 except Exception:
                     # The reaper must never die: it is the only thing enforcing TTLs.
                     log.exception("purge failed")
