@@ -51,9 +51,16 @@ def test_env_is_carried_into_the_unit(tmp_path: Path) -> None:
     assert 'Environment="TRAINWATCH_TOKEN=twk_a_b"' in unit
 
 
-def test_no_env_block_when_there_is_no_env(tmp_path: Path) -> None:
+def test_the_env_block_always_exists_because_path_is_always_set(tmp_path: Path) -> None:
+    """Previously asserted the opposite: no env means no block.
+
+    That premise is now deliberately false. PATH is always injected, because a
+    supervised service inherits almost nothing and an absent PATH is invisible
+    until some shelled-out binary quietly cannot be found.
+    """
     plist = service.render("hub", repo=tmp_path, env={}, system="Darwin")
-    assert "EnvironmentVariables" not in plist
+    assert "EnvironmentVariables" in plist
+    assert "<key>PATH</key>" in plist
 
 
 def test_restart_on_crash_but_not_on_clean_exit(tmp_path: Path) -> None:
@@ -78,3 +85,21 @@ def test_load_command_is_platform_correct() -> None:
     assert mac[0] == "launchctl" and "bootstrap" in mac
     linux = service.load_command("ship", system="Linux")
     assert linux[:3] == ["systemctl", "--user", "enable"]
+
+
+def test_units_carry_a_path_that_includes_usr_local_bin(tmp_path: Path) -> None:
+    """launchd gives an agent PATH=/usr/bin:/bin:/usr/sbin:/sbin and nothing else.
+
+    tailscale lives in /usr/local/bin, so without this the Host allowlist
+    silently collapsed to localhost and the dashboard answered 421 to its own
+    URL — a failure that reads like DNS, not like a missing PATH.
+    """
+    for system in ("Darwin", "Linux"):
+        text = service.render("hub", repo=tmp_path, system=system)
+        assert "/usr/local/bin" in text, system
+        assert "/opt/homebrew/bin" in text, f"Apple Silicon brew missing ({system})"
+
+
+def test_an_explicit_path_overrides_the_default(tmp_path: Path) -> None:
+    text = service.render("hub", repo=tmp_path, env={"PATH": "/custom"}, system="Linux")
+    assert 'Environment="PATH=/custom"' in text

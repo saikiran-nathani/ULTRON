@@ -33,6 +33,21 @@ __all__ = ["UNITS", "Unit", "render", "unit_path"]
 
 LABEL = "com.trainwatch"
 
+# A supervised service inherits almost nothing. launchd hands an agent
+# PATH=/usr/bin:/bin:/usr/sbin:/sbin, and systemd is barely more generous --
+# so every binary the app shells out to must be reachable from *this* PATH,
+# not from the one your shell has.
+#
+# Found the hard way: with the default PATH, `tailscale` (at /usr/local/bin)
+# was invisible, so resolve_allowed_hosts() could not discover the machine's
+# tailnet names and the Host allowlist silently collapsed to localhost. The
+# dashboard then answered 421 to its own URL -- a rejection that reads like a
+# DNS or proxy fault, not like a missing PATH entry.
+#
+# The interpreter path is absolute for the same reason; this is that rule
+# applied to every *other* command, which is the half that is easy to miss.
+_PATH = "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+
 
 @dataclass(frozen=True)
 class Unit:
@@ -84,7 +99,9 @@ def render(
         raise KeyError(f"unknown unit {name!r}; choose from {sorted(UNITS)}")
     unit = UNITS[name]
     system = system or platform.system()
-    env = dict(env or {})
+    # PATH first so an explicit caller-supplied PATH still wins, but the
+    # default is never simply absent.
+    env = {"PATH": _PATH, **dict(env or {})}
     return (
         _launchd(unit, repo=repo, env=env)
         if system == "Darwin"
