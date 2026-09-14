@@ -1,4 +1,8 @@
-import { defineConfig } from "vite";
+// `vitest/config` re-exports vite's defineConfig with the `test` key typed.
+// Importing it from "vite" type-errors on `test`, and a separate
+// vitest.config.ts would duplicate the `@` alias — which is the kind of
+// two-copies-of-one-fact that drifts.
+import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import path from "node:path";
@@ -16,6 +20,13 @@ export default defineConfig({
     // The iPad may load this over cellular through Tailscale — keep it small
     // and in one chunk rather than paying extra round-trips.
     chunkSizeWarningLimit: 700,
+  },
+  test: {
+    // `scripts/sw-routing.test.mjs` is a `node:test` file that loads the
+    // service worker into a `node:vm` sandbox. vitest would collect it by
+    // filename and fail on the unfamiliar runner, so the two suites are kept
+    // apart — `npm test` runs both in sequence.
+    include: ["src/**/*.test.ts"],
   },
   server: {
     port: 5173,

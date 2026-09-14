@@ -97,7 +97,10 @@ jobs:
       # parsed; these exercise its actual routing decisions in a stdlib
       # sandbox, and were themselves mutation-tested to confirm they fail when
       # the behaviour regresses.
-      - name: service worker routing
+      # `npm test` runs both suites: the service worker (node:test, in a
+      # node:vm sandbox) and the TypeScript units (vitest), including the sync
+      # client's diff/clock properties. Both were mutation-checked.
+      - name: service worker + sync client
         run: npm run test
 
       - name: build
