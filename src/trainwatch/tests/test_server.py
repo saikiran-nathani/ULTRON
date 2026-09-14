@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import time
 from collections.abc import Iterator
 
@@ -274,3 +275,44 @@ def test_the_hub_half_does_have_writes(client: TestClient) -> None:
 
 def test_notify_disabled_is_reported_to_the_client(client: TestClient) -> None:
     assert client.get("/api/state").json()["notify"]["enabled"] is False
+
+
+def test_the_shell_revalidates_and_hashed_assets_do_not(client: TestClient) -> None:
+    """The deploy story depends on these two headers, and there were none.
+
+    Measured on the live hub: it was serving one bundle while an open page
+    still ran a previous one, with no service worker involved. With an ETag
+    and no explicit freshness, a browser applies *heuristic* caching — it
+    invents a lifetime and may reuse the shell without asking.
+
+    Which silently falsifies "build, copy to the TUF, every device has it on
+    next load". A fix that does not arrive was not shipped.
+
+    The split is what makes both settings safe: a content-hashed asset can be
+    immutable because a change produces a different URL, and everything else
+    must revalidate. `no-cache` means "store but revalidate", so with the ETag
+    that is a 304 rather than a re-download.
+    """
+    shell = client.get("/")
+    if shell.status_code == 503:
+        pytest.skip("no bundle built in this checkout")
+
+    assert shell.headers["cache-control"] == "no-cache"
+
+    asset = re.search(r"assets/index-[^\"]+\.js", shell.text)
+    assert asset, "the shell references no hashed bundle"
+    hashed = client.get("/" + asset.group(0))
+    assert hashed.status_code == 200
+    assert "immutable" in hashed.headers["cache-control"]
+    assert "max-age=31536000" in hashed.headers["cache-control"]
+
+    # sw.js matters most: a stale service worker keeps serving a stale app and
+    # can outlive several deploys.
+    worker = client.get("/sw.js")
+    if worker.status_code == 200:
+        assert worker.headers["cache-control"] == "no-cache"
+
+    for path in ("/manifest.webmanifest", "/icon-192.png"):
+        resp = client.get(path)
+        if resp.status_code == 200:
+            assert resp.headers["cache-control"] == "no-cache", path

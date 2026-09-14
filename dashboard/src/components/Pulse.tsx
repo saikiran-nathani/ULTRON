@@ -94,7 +94,16 @@ export function Pulse({
         </ProgressRing>
       </div>
 
-      <div className="min-w-0 flex-1 text-center sm:text-left">
+      {/* w-full matters and min-w-0 alone does not.
+          Below `sm` the parent is `flex-col`, so `flex-1` sizes this on the
+          MAIN axis — which is vertical — and leaves the width unconstrained.
+          The Field row below then takes its natural 474px inside a 375px
+          viewport, overflowing 49px left and 50px right. Nothing scrolls, so
+          that content is not merely awkward: it is unreachable. It also
+          stopped the `truncate` on the run name from ever engaging, because
+          truncation needs a bounded width.
+          `w-full` bounds it when stacked; `flex-1` still does the work at sm+. */}
+      <div className="min-w-0 w-full flex-1 text-center sm:text-left">
         <div className="label mb-2 flex items-center justify-center gap-2 text-accent-dim sm:justify-start">
           <span className="inline-block h-px w-5 bg-accent-dim/60" />
           {live ? "live run" : "last run"}

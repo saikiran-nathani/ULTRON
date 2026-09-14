@@ -61,7 +61,17 @@ export function CopyButton({
       className={cn(
         "inline-flex shrink-0 items-center gap-1.5 rounded-sm border bg-card/60 font-medium",
         "transition-all duration-150 ease-[var(--ease-signature)] active:scale-[0.94]",
-        size === "sm" ? "min-h-[34px] px-2.5 text-[11px]" : "min-h-[44px] px-3.5 text-[12px]",
+        // `pointer-coarse:` rather than a breakpoint. Screen width is a bad
+        // proxy for input device — an iPad in landscape is 1024px wide and
+        // still driven by a thumb, while a small desktop window is not. The
+        // media query asks the question that actually matters.
+        //
+        // 34px is below Apple's 44px minimum and below this repo's own stated
+        // floor (see the note in ui/Button.tsx), so on touch it grows. On a
+        // pointer it stays dense, which is why the `sm` size exists.
+        size === "sm"
+          ? "min-h-[34px] pointer-coarse:min-h-[44px] px-2.5 text-[11px]"
+          : "min-h-[44px] px-3.5 text-[12px]",
         tone,
         className,
       )}

@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from .. import __version__
@@ -79,6 +79,13 @@ STREAM_MAX_IDLE = 15.0
 # Exit code for descriptor exhaustion. Distinct from 1 so `hub.log` and
 # `launchctl list`'s LastExitStatus say which failure this was.
 EXIT_NO_DESCRIPTORS = 24  # matches errno.EMFILE, for grep-ability
+
+# Content-hashed bundles: the filename IS the version, so a change produces a
+# different URL and this can never serve stale code.
+_CACHE_IMMUTABLE = "public, max-age=31536000, immutable"
+# Everything else. `no-cache` does not mean "do not store" — it means "store,
+# but revalidate before reuse", which with an ETag is a cheap 304.
+_CACHE_REVALIDATE = "no-cache"
 
 
 class StorePool:
@@ -613,11 +620,49 @@ def create_app(config: Config | None = None) -> FastAPI:
 
     index = STATIC_DIR / "index.html"
     if index.is_file():
-        app.mount("/assets", StaticFiles(directory=STATIC_DIR / "assets"), name="assets")
+        # ── Caching, and why it is not left to the defaults ──────────────
+        #
+        # Nothing here sent a Cache-Control header, only an ETag. A browser
+        # with an ETag and no explicit freshness applies *heuristic* caching:
+        # it invents a lifetime and may serve the shell from cache without
+        # asking. Measured on this very hub — the server was serving
+        # index-CbOgMrwA.js while the open page was still running
+        # index-DEgcqPuZ.js, with no service worker involved.
+        #
+        # Which quietly falsifies the deploy story this whole project rests
+        # on: "npm run build, copy to the TUF, every device has it on next
+        # load". It did not. The device kept the old shell until the browser
+        # happened to revalidate, and a fix that does not arrive is a fix that
+        # was not shipped.
+        #
+        # Two rules, and the split is what makes both safe:
+        #
+        #   /assets/*  content-hashed by Vite, so the name IS the version.
+        #              Cache for a year, immutable, never revalidate. A change
+        #              produces a different URL.
+        #   everything the shell, the worker, the manifest, the icons. `no-cache`
+        #   else       does NOT mean "do not store" — it means "store, but
+        #              revalidate before reuse", which with the ETag above is a
+        #              cheap 304 and not a re-download.
+        #
+        # `sw.js` matters most: a stale service worker keeps serving a stale
+        # app and can outlive several deploys.
+        class _HashedAssets(StaticFiles):
+            """StaticFiles, but the hashed bundles are declared immutable."""
+
+            def file_response(self, *args: object, **kwargs: object) -> Response:
+                resp = super().file_response(*args, **kwargs)  # type: ignore[arg-type]
+                resp.headers["Cache-Control"] = _CACHE_IMMUTABLE
+                return resp
+
+        app.mount("/assets", _HashedAssets(directory=STATIC_DIR / "assets"), name="assets")
 
         @app.get("/manifest.webmanifest", include_in_schema=False)
         def manifest() -> FileResponse:
-            return FileResponse(STATIC_DIR / "manifest.webmanifest")
+            return FileResponse(
+                STATIC_DIR / "manifest.webmanifest",
+                headers={"Cache-Control": _CACHE_REVALIDATE},
+            )
 
         @app.get("/{full_path:path}", include_in_schema=False)
         def spa(full_path: str) -> FileResponse:
@@ -625,8 +670,8 @@ def create_app(config: Config | None = None) -> FastAPI:
             # the rest. Static files that exist are served directly.
             candidate = (STATIC_DIR / full_path).resolve()
             if full_path and candidate.is_file() and candidate.is_relative_to(STATIC_DIR.resolve()):
-                return FileResponse(candidate)
-            return FileResponse(index)
+                return FileResponse(candidate, headers={"Cache-Control": _CACHE_REVALIDATE})
+            return FileResponse(index, headers={"Cache-Control": _CACHE_REVALIDATE})
     else:
 
         @app.get("/", include_in_schema=False)

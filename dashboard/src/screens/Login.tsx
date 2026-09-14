@@ -399,7 +399,7 @@ function Banner({
         <p className="flex-1 text-[11px] leading-relaxed text-fg-dim">{children}</p>
         <button
           onClick={onDismiss}
-          className="min-h-[32px] shrink-0 px-2 text-[11px] text-fg-muted transition-colors hover:text-fg"
+          className="min-h-[44px] shrink-0 px-3 text-[11px] text-fg-muted transition-colors hover:text-fg"
         >
           {dismissLabel}
         </button>

@@ -32,7 +32,11 @@ export function Tabs({
             aria-selected={on}
             onClick={() => onChange(t.id)}
             className={cn(
-              "relative shrink-0 px-3.5 py-3 text-[12.5px] font-medium transition-colors duration-150",
+              // min-h, not more padding: py-3 at this font size lands on 43px,
+              // one pixel under Apple's minimum. A floor is exact; padding
+              // drifts with the font.
+              "relative min-h-[44px] shrink-0 px-3.5 py-3 text-[12.5px] font-medium",
+              "transition-colors duration-150",
               "active:scale-[0.97]",
               on ? "text-accent-lt" : "text-fg-muted hover:text-fg-dim",
             )}
