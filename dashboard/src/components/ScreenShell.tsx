@@ -19,7 +19,10 @@ export function ScreenShell({
       className={cn(
         "safe-t mx-auto flex min-h-full max-w-[1160px] flex-col px-5 sm:px-8",
         // Room for the bottom tab bar in portrait; normal padding with a sidebar.
-        "pb-[104px] lg:pb-14",
+        // The inset is added, not maxed: the tab bar's own height and the home
+        // indicator stack, so on an iPhone the last row of content would
+        // otherwise sit under the indicator.
+        "pb-[calc(104px+env(safe-area-inset-bottom))] lg:pb-14",
         className,
       )}
     >

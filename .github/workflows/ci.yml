@@ -1,0 +1,171 @@
+# CI — the gates, run where nobody can forget to run them.
+#
+# This file exists because `dashboard/vite.config.ts` said it did:
+#
+#     # Built straight into the Python package so the training box never needs
+#     # Node. This directory is committed; CI fails if it goes stale.
+#
+# and `.github/workflows/` did not exist. An unenforced guarantee is worse than
+# no guarantee, because it is *believed* — the comment was the reason nobody
+# checked by hand.
+#
+# The committed bundle is the thing at risk. `src/trainwatch/server/static/` is
+# checked in on purpose, so the TUF never needs a Node toolchain to serve the
+# dashboard, and the cost of that choice is that a source change without a
+# rebuild ships a UI that silently does not match its code. Locally that looks
+# like an edit that does nothing.
+
+name: ci
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+# A second push should cancel the first: the only run whose answer matters is
+# the one for the current tip.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    name: trainwatch suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12" # the TUF's version; the Mac venv is 3.11
+
+      # Deliberately NOT `pip install -r requirements/base.txt`. That file
+      # pulls the whole HF stack — transformers, datasets, pyarrow, wandb —
+      # none of which the trainwatch or sandbox suites import. Installing it
+      # would turn a one-minute job into a ten-minute one to exercise nothing.
+      #
+      # This list was derived by resolving every non-stdlib import under
+      # src/trainwatch and src/sandbox, then verified by running the full suite
+      # in a venv containing exactly these: 416 passed, 1 skipped.
+      #
+      # pyyaml is the surprising one. trainwatch's core is dependency-free by
+      # design, but progress.py imports yaml, and locally that is satisfied
+      # transitively by transformers — so it is invisible until the day
+      # something installs a smaller set. Which is this job.
+      - name: install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install \
+            pytest pytest-timeout \
+            fastapi uvicorn httpx python-multipart \
+            pyyaml
+
+      # No `|| true`, no scraping of stdout: the exit code is the contract.
+      - name: pytest
+        run: python -m pytest
+
+  dashboard:
+    name: dashboard + bundle freshness
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: dashboard
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
+
+      # `ci` and not `install`: it installs exactly the lockfile, so the build
+      # this job compares against is reproducible rather than whatever resolved
+      # today.
+      - name: install
+        run: npm ci
+
+      - name: typecheck
+        run: npm run typecheck
+
+      # The service worker sits in front of every request on every device and
+      # is the least observable file in the app. `node --check` only proved it
+      # parsed; these exercise its actual routing decisions in a stdlib
+      # sandbox, and were themselves mutation-tested to confirm they fail when
+      # the behaviour regresses.
+      - name: service worker routing
+        run: npm run test
+
+      - name: build
+        run: npm run build
+
+      # The actual gate. Asset filenames are content hashes, so any difference
+      # in source that was not rebuilt shows up as a changed name here.
+      #
+      # `git status --porcelain` rather than `git diff --exit-code`, because
+      # diff does not see *untracked* files — a newly added asset (an icon, a
+      # service worker) that was never committed would otherwise pass.
+      - name: the committed bundle matches the committed source
+        working-directory: .
+        run: |
+          if [ -n "$(git status --porcelain -- src/trainwatch/server/static)" ]; then
+            echo "::error::The committed bundle is stale."
+            echo
+            echo "src/trainwatch/server/static/ is checked in so the TUF never needs Node."
+            echo "Rebuilding from this commit's source produced something different, so the"
+            echo "dashboard being served does not match the code in this commit."
+            echo
+            echo "Fix:  cd dashboard && npm ci && npm run build"
+            echo "      git add ../src/trainwatch/server/static && git commit"
+            echo
+            git status --porcelain -- src/trainwatch/server/static
+            echo
+            git --no-pager diff -- src/trainwatch/server/static/index.html \
+              src/trainwatch/server/static/manifest.webmanifest
+            exit 1
+          fi
+          echo "Bundle is current."
+
+      # Belt and braces on the part that is easy to get wrong by hand, and
+      # that `file` and `sips` both report as fine: the manifest must name PNG
+      # icons at 192 and 512, or Chrome will not offer to install the app, and
+      # there is nothing in any console to say why.
+      - name: installability preconditions
+        working-directory: .
+        run: |
+          python3 - <<'PY'
+          import json, pathlib, sys
+
+          static = pathlib.Path("src/trainwatch/server/static")
+          problems = []
+
+          manifest = json.loads((static / "manifest.webmanifest").read_text())
+          sizes = {i.get("sizes") for i in manifest["icons"] if i.get("type") == "image/png"}
+          for need in ("192x192", "512x512"):
+              if need not in sizes:
+                  problems.append(f"manifest has no {need} PNG icon (Chrome install criterion)")
+
+          if not (static / "sw.js").exists():
+              problems.append("sw.js is not published (Chrome install criterion)")
+          elif "addEventListener('fetch'" not in (t := (static / "sw.js").read_text()) \
+                  and 'addEventListener("fetch"' not in t:
+              problems.append("sw.js registers no fetch handler, so it does not count as installable")
+
+          html = (static / "index.html").read_text()
+          if 'rel="apple-touch-icon"' not in html:
+              problems.append("no apple-touch-icon link")
+          elif ".svg" in html.split('rel="apple-touch-icon"')[1].split(">")[0]:
+              problems.append("apple-touch-icon points at an SVG; iOS screenshots the page instead")
+
+          for icon in ("icon-192.png", "icon-512.png", "apple-touch-icon.png"):
+              if not (static / icon).exists():
+                  problems.append(f"missing {icon}")
+
+          for p in problems:
+              print(f"::error::{p}")
+          sys.exit(1 if problems else 0)
+          PY

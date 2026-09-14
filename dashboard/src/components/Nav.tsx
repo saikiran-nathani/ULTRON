@@ -12,8 +12,9 @@
  * Both trees exist in the DOM at once (hidden by CSS, not unmounted), hence
  * two distinct layoutIds for the sliding indicator.
  */
+import { useState } from "react";
 import { motion } from "framer-motion";
-import { Activity, ClipboardList, FileText, Send } from "lucide-react";
+import { Activity, ClipboardList, FileText, LogOut, PencilLine, Send, UserRound } from "lucide-react";
 import { cn } from "@/lib/cn";
 import type { Connection } from "@/lib/api";
 
@@ -48,16 +49,21 @@ export function Sidebar({
   device,
   onRenameDevice,
   peers,
+  identity,
+  onSignOut,
 }: NavProps & {
   hostname?: string;
   device: string;
   onRenameDevice: () => void;
   peers: { name: string; online: boolean }[];
+  /** null when the instance has no accounts enrolled — nothing to sign out of. */
+  identity: string | null;
+  onSignOut: () => void;
 }) {
   const conn = CONN[connection];
   return (
     <aside className="safe-l hidden w-[var(--spacing-sidebar)] shrink-0 flex-col border-r-[0.5px] border-line bg-panel/80 backdrop-blur-xl lg:flex">
-      <div className="safe-t px-5 pb-6 pt-7">
+      <div className="px-5 pb-6 pt-[max(env(safe-area-inset-top),1.75rem)]">
         <div className="display text-[17px] leading-none text-fg">trainwatch</div>
         <div className="label mt-2 text-accent-dim">{hostname ?? "tailnet"}</div>
       </div>
@@ -132,7 +138,26 @@ export function Sidebar({
         </div>
       )}
 
-      <div className="safe-b mt-auto border-t-[0.5px] border-line px-5 py-4">
+      <div className="mt-auto border-t-[0.5px] border-line px-5 pt-4 pb-[max(env(safe-area-inset-bottom),1rem)]">
+        {/* Sign out calls the server. Sessions are server-side and revocable,
+            so clearing only local state would leave a live, usable cookie —
+            a logout that logs nothing out. */}
+        {identity && (
+          <div className="mb-3 flex items-center justify-between gap-2 border-b-[0.5px] border-hairline pb-3">
+            <span className="flex min-w-0 items-center gap-1.5">
+              <UserRound size={11} className="shrink-0 text-fg-muted" />
+              <span className="truncate text-[11px] text-fg-dim">{identity}</span>
+            </span>
+            <button
+              onClick={onSignOut}
+              title="Sign out"
+              aria-label="Sign out"
+              className="shrink-0 p-1 text-fg-muted transition-colors hover:text-[var(--color-bad)]"
+            >
+              <LogOut size={12} />
+            </button>
+          </div>
+        )}
         <button
           onClick={onRenameDevice}
           className="mb-2 block max-w-full truncate text-left text-[11px] text-fg-muted transition-colors hover:text-fg-dim"
@@ -204,5 +229,95 @@ export function BottomBar({ screen, onChange, connection, badges }: NavProps) {
         </span>
       </div>
     </nav>
+  );
+}
+
+/**
+ * Account controls for portrait, where there is no sidebar.
+ *
+ * Sign-out and device-rename both lived only in the sidebar, which is
+ * `hidden ... lg:flex` — so on the iPhone and the Realme they did not exist
+ * at all. That is the same class of defect as the `hover:`-only controls the
+ * plan calls out: an action that is present in the code and unreachable with
+ * a thumb is an action the app does not have.
+ *
+ * Floated clear of the tab bar rather than added to it. The bar has four
+ * slots chosen deliberately, and ScreenShell already reserves 104px of
+ * bottom padding, so this sits over empty space instead of over content.
+ */
+export function AccountPill({
+  identity,
+  device,
+  onRenameDevice,
+  onSignOut,
+}: {
+  identity: string | null;
+  device: string;
+  onRenameDevice: () => void;
+  onSignOut: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <div className="lg:hidden">
+      {open && (
+        <>
+          {/* Tap-away, and it must be under the sheet but over everything
+              else — z-40 is the tab bar, so 44/45 rather than the grain's 60. */}
+          <button
+            aria-label="Close"
+            onClick={() => setOpen(false)}
+            className="fixed inset-0 z-[44] bg-bg/60 backdrop-blur-sm"
+          />
+          <div className="fixed bottom-[calc(env(safe-area-inset-bottom)+118px)] right-4 z-[45] w-[216px] overflow-hidden rounded-sm border-[0.5px] border-line bg-panel/95 shadow-[var(--shadow-pop)] backdrop-blur-xl">
+            {identity && (
+              <div className="border-b-[0.5px] border-hairline px-3.5 py-2.5">
+                <div className="label mb-0.5">signed in as</div>
+                <div className="truncate text-[12px] text-fg-dim">{identity}</div>
+              </div>
+            )}
+            <button
+              onClick={() => {
+                setOpen(false);
+                onRenameDevice();
+              }}
+              className="flex min-h-[44px] w-full items-center gap-2.5 px-3.5 text-left text-[12px] text-fg-dim transition-colors active:bg-card-hover"
+            >
+              <PencilLine size={12} className="shrink-0 text-fg-muted" />
+              <span className="truncate">
+                rename <span className="text-fg-muted">({device})</span>
+              </span>
+            </button>
+            {identity && (
+              <button
+                onClick={() => {
+                  setOpen(false);
+                  onSignOut();
+                }}
+                className="flex min-h-[44px] w-full items-center gap-2.5 border-t-[0.5px] border-hairline px-3.5 text-left text-[12px] text-[var(--color-bad)] transition-colors active:bg-card-hover"
+              >
+                <LogOut size={12} className="shrink-0" />
+                sign out
+              </button>
+            )}
+          </div>
+        </>
+      )}
+
+      <button
+        onClick={() => setOpen((o) => !o)}
+        aria-label="Account and device"
+        aria-expanded={open}
+        className={cn(
+          "fixed bottom-[calc(env(safe-area-inset-bottom)+66px)] right-4 z-[46]",
+          "grid h-11 w-11 place-items-center rounded-full border-[0.5px] border-line",
+          "bg-panel/90 text-fg-muted shadow-[var(--shadow-card)] backdrop-blur-xl",
+          "transition-all duration-150 ease-[var(--ease-signature)] active:scale-[0.94]",
+          open && "border-line-active text-fg",
+        )}
+      >
+        <UserRound size={15} strokeWidth={1.9} />
+      </button>
+    </div>
   );
 }

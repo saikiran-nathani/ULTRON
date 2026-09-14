@@ -186,7 +186,20 @@
   }
 
   /* Home-screen PWA on iPad: keep content out of the notch and off the
-     home indicator. */
+     home indicator.
+     ────────────────────────────────────────────────────────────────────────
+     CAUTION, and it has bitten three times already: these SET padding, they
+     do not add to it. Combining `safe-t` with `pt-7` on one element does not
+     give you "at least 28px" -- it gives you `env(safe-area-inset-top)`,
+     which is 0px on everything without a notch, and the pt-7 silently
+     vanishes. Both are utilities, so the later definition simply wins.
+
+     Use these only where nothing else sets padding on the SAME side.
+     Where a minimum is wanted, compose it explicitly instead:
+
+         pt-[max(env(safe-area-inset-top),1.75rem)]
+
+     which reads as what it is: the larger of the inset and the design value. */
   .safe-t {
     padding-top: env(safe-area-inset-top);
   }
@@ -214,6 +227,22 @@
   }
   .sonar-ping {
     animation: sonar-ping 2.8s var(--ease-signature) infinite;
+  }
+
+  /* The radar sweep on the gate. Linear, not eased: a sweep that accelerates
+     and decelerates reads as a loading spinner, and this is meant to read as
+     an instrument that is simply on. Paired with sonar-ping, which is eased,
+     because a *return* does decay. */
+  @keyframes radar-sweep {
+    from {
+      transform: rotate(0deg);
+    }
+    to {
+      transform: rotate(360deg);
+    }
+  }
+  .radar-sweep {
+    animation: radar-sweep 4.4s linear infinite;
   }
 
   /* ── Mount choreography, in CSS on purpose ──────────────────────────────

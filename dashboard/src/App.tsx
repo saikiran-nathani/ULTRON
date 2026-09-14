@@ -7,21 +7,97 @@
  * Atmosphere is composed here: a sidebar in landscape, a bottom tab bar in
  * portrait, a keyed directional page transition, and film grain over
  * everything without ever blocking input.
+ *
+ * The auth gate and the workspace are deliberately two components rather than
+ * one with conditional JSX. `Workspace` owns the data hooks, so while we are
+ * unauthenticated it is not mounted and those hooks never run — otherwise the
+ * login screen would sit in front of a `useLiveState` and a `useHub` politely
+ * re-polling a server that is 401ing them, every fifteen seconds, forever.
  */
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { WifiOff } from "lucide-react";
-import { BottomBar, SCREENS, Sidebar, type Screen } from "@/components/Nav";
+import { AccountPill, BottomBar, SCREENS, Sidebar, type Screen } from "@/components/Nav";
 import { RunPicker } from "@/components/RunPicker";
 import { ClipScreen } from "@/screens/Clip";
 import { DropScreen } from "@/screens/Drop";
+import { InstallHint, Login, OpenNotice } from "@/screens/Login";
 import { NotesScreen } from "@/screens/Notes";
 import { Train } from "@/screens/Train";
 import { useLiveState } from "@/lib/api";
+import { logout } from "@/lib/auth";
 import { deviceName, setDeviceName, useHub } from "@/lib/hub";
-import { useSystem } from "@/lib/hooks";
+import { dismissInstallHint, shouldShowInstallHint } from "@/lib/pwa";
+import { useAuth, useSystem } from "@/lib/hooks";
 
 export default function App() {
+  const { auth, reachable, refresh: refreshAuth } = useAuth();
+  const [noticeDismissed, setNoticeDismissed] = useState(false);
+  // Evaluated once at mount: the answer cannot change within a session, and
+  // re-checking would make the banner flicker on a re-render.
+  const [showInstall, setShowInstall] = useState(() => shouldShowInstallHint());
+
+  const signOut = useCallback(async () => {
+    // Await the server call before flipping the UI. A local-only sign-out
+    // would show "signed out" while the cookie stayed live and usable, which
+    // is the most reassuring possible way to not be logged out.
+    try {
+      await logout();
+    } finally {
+      await refreshAuth();
+    }
+  }, [refreshAuth]);
+
+  // Boot: no verdict has arrived yet. Distinguish "still asking" from "cannot
+  // ask" — a login form in front of an unreachable server invites someone to
+  // type a password at a box that cannot check it.
+  if (auth.status === "unknown") {
+    return (
+      <div className="relative h-full w-full text-fg">
+        <Boot connection={reachable ? "connecting" : "offline"} />
+      </div>
+    );
+  }
+
+  if (auth.status === "anonymous") {
+    return (
+      <div className="relative h-full w-full text-fg">
+        <Login onSignedIn={refreshAuth} />
+      </div>
+    );
+  }
+
+  // "open" (nothing enrolled, open on the tailnet) and "signed-in" both get
+  // the app. The difference is the banner, which says the posture out loud
+  // instead of leaving it invisible.
+  return (
+    <div className="relative flex h-full w-full flex-col overflow-hidden text-fg">
+      {auth.status === "open" && !noticeDismissed && (
+        <OpenNotice onDismiss={() => setNoticeDismissed(true)} />
+      )}
+      {showInstall && (
+        <InstallHint
+          onDismiss={() => {
+            dismissInstallHint();
+            setShowInstall(false);
+          }}
+        />
+      )}
+      <Workspace
+        identity={auth.status === "signed-in" ? auth.name : null}
+        onSignOut={signOut}
+      />
+    </div>
+  );
+}
+
+function Workspace({
+  identity,
+  onSignOut,
+}: {
+  identity: string | null;
+  onSignOut: () => void;
+}) {
   const [screen, setScreen] = useState<Screen>("clip");
   const [runId, setRunId] = useState<string | undefined>(undefined);
   const [device, setDevice] = useState(() => deviceName());
@@ -67,7 +143,7 @@ export default function App() {
   ) : null;
 
   return (
-    <div className="relative flex h-full w-full overflow-hidden text-fg">
+    <div className="relative flex min-h-0 flex-1 overflow-hidden">
       <Sidebar
         screen={screen}
         onChange={setScreen}
@@ -77,6 +153,8 @@ export default function App() {
         device={device}
         onRenameDevice={renameDevice}
         peers={(hub?.devices ?? []).map((d) => ({ name: d.name, online: d.online }))}
+        identity={identity}
+        onSignOut={onSignOut}
       />
 
       <main className="relative flex-1 overflow-hidden">
@@ -93,6 +171,15 @@ export default function App() {
             (state ? <Train state={state} actions={runPicker} /> : <Boot connection={trainConn} />)}
         </div>
       </main>
+
+      {/* Portrait has no sidebar, so sign-out and device-rename would
+          otherwise be unreachable with a thumb. */}
+      <AccountPill
+        identity={identity}
+        device={device}
+        onRenameDevice={renameDevice}
+        onSignOut={onSignOut}
+      />
 
       <BottomBar
         screen={screen}

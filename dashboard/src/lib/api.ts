@@ -1,5 +1,6 @@
 /** Types mirroring trainwatch's read-only API, plus the live-state hook. */
 import { useCallback, useEffect, useRef, useState } from "react";
+import { reportUnauthorized } from "./auth";
 
 export type RunStatus = "running" | "finished" | "failed" | "dead" | "stopped";
 export type Verdict =
@@ -83,7 +84,16 @@ export type Series = Record<string, [number, number][]>;
 
 export async function getJSON<T>(path: string, signal?: AbortSignal): Promise<T> {
   const res = await fetch(path, { signal, headers: { Accept: "application/json" } });
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText} — ${path}`);
+  if (!res.ok) {
+    // A 401 is not an error this caller can do anything about, and it is not
+    // a transient network fault either — the session died under a screen that
+    // is already open. Tell the shell once, centrally, so it flips to the
+    // login form; otherwise every screen invents its own error state and the
+    // ones that swallow errors keep rendering stale numbers as if they were
+    // live, which is the failure mode this whole project is about.
+    if (res.status === 401) reportUnauthorized();
+    throw new Error(`${res.status} ${res.statusText} — ${path}`);
+  }
   return (await res.json()) as T;
 }
 

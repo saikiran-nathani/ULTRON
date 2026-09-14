@@ -1,5 +1,6 @@
 /** Device-hub client: shared clipboard, files, links, notes, presence. */
 import { useCallback, useEffect, useRef, useState } from "react";
+import { reportUnauthorized, writeHeaders } from "./auth";
 import type { Connection } from "./api";
 
 export interface Clip {
@@ -102,13 +103,17 @@ export function setDeviceName(name: string): void {
  * ADR-0003 C3: writes must carry X-Trainwatch. That makes the request
  * "non-simple", so a browser is forced to preflight it — and we never answer
  * a preflight, which is what stops another origin writing to the hub.
+ *
+ * C12 adds X-CSRF-Token on top, echoing the `tw_csrf` cookie. Both come from
+ * `writeHeaders()` rather than being spelled out here, so there is exactly one
+ * definition of "what a write must carry" — two copies would drift, and the
+ * symptom of the drift would be a 403 on one screen and not another.
  */
 function headers(extra: Record<string, string> = {}): Record<string, string> {
-  return {
-    "X-Trainwatch": "1",
+  return writeHeaders({
     "X-Trainwatch-Device": deviceName(),
     ...extra,
-  };
+  });
 }
 
 export class HubError extends Error {}
@@ -130,6 +135,18 @@ async function req<T>(path: string, init: RequestInit = {}): Promise<T> {
       detail =
         "the server refused this hostname (DNS-rebinding guard). Add it to " +
         "TRAINWATCH_ALLOWED_HOSTS, or use the Tailscale name.";
+    }
+    // The session died mid-session. One central handler flips the shell to
+    // the login form; the throw still happens so this screen stops rather
+    // than continuing against a server that is refusing it.
+    if (res.status === 401) reportUnauthorized();
+    // 403 has two quite different causes and the same status code. Saying
+    // which one it was is the difference between a one-line fix and an hour:
+    // a CSRF mismatch means the cookie and header disagree (usually a stale
+    // tab after a re-login), a scope failure means this identity is not
+    // allowed to do this at all.
+    if (res.status === 403 && /csrf/i.test(detail)) {
+      detail = "this tab's CSRF token is stale — reload the page and retry.";
     }
     throw new HubError(detail);
   }

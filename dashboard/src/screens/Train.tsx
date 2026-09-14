@@ -24,7 +24,7 @@ export function Train({ state, actions }: { state: State; actions?: ReactNode })
 
   return (
     <div className="flex min-h-full flex-col">
-      <div className="safe-t mx-auto w-full max-w-[1160px] px-5 pt-6 sm:px-8 lg:pt-8">
+      <div className="mx-auto w-full max-w-[1160px] px-5 pt-[max(env(safe-area-inset-top),1.5rem)] sm:px-8 lg:pt-[max(env(safe-area-inset-top),2rem)]">
         <Tabs
           tabs={[
             { id: "watch", label: "Watch" },

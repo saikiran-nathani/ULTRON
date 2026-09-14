@@ -4,8 +4,15 @@ import { cn } from "@/lib/cn";
 type Variant = "primary" | "ghost" | "subtle" | "danger";
 
 const VARIANTS: Record<Variant, string> = {
+  // A vertical gradient with an inner top highlight rather than one flat
+  // fill. At full-width-and-44px-tall, a single saturated colour reads as a
+  // poster; the gradient plus the 1px highlight is the same machined-metal
+  // treatment the cards use, so the loudest element on the screen still
+  // belongs to the same object as everything around it.
   primary:
-    "bg-accent text-bg border border-accent-lt/30 font-semibold hover:bg-accent-lt hover:shadow-[var(--shadow-glow)]",
+    "bg-gradient-to-b from-accent-lt to-accent text-bg border border-accent-lt/30 font-semibold " +
+    "shadow-[inset_0_1px_0_rgba(255,255,255,0.28)] " +
+    "hover:from-accent-lt hover:to-accent-lt hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.34),var(--shadow-glow)]",
   ghost:
     "bg-transparent text-fg-dim hover:text-fg hover:bg-card-hover border border-line hover:border-line-active",
   subtle:

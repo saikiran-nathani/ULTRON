@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { onUnauthorized, stateFrom, whoami, type AuthState } from "./auth";
 import { fetchGpu, fetchGroups, fetchSeries, fetchSystem, type Gpu, type Series, type SystemInfo } from "./api";
 
 /**
@@ -130,4 +131,51 @@ export function useSystem() {
     };
   }, []);
   return system;
+}
+
+/**
+ * Who we are, resolved once at boot and again whenever the server says 401.
+ *
+ * `reachable` is separate from the auth state on purpose. If /whoami cannot
+ * be reached at all, the honest answer is not "logged out" — it is "we do not
+ * know", and showing a login form for a server that is down invites someone
+ * to type a password at a box that cannot check it. Absence of evidence must
+ * not render as a verdict, which is the same rule the rest of this project
+ * runs on.
+ */
+export function useAuth() {
+  const [auth, setAuth] = useState<AuthState>({ status: "unknown" });
+  const [reachable, setReachable] = useState(true);
+
+  const refresh = useCallback(async () => {
+    try {
+      setAuth(stateFrom(await whoami()));
+      setReachable(true);
+    } catch {
+      setReachable(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  // A session can die under an open screen — expiry, revocation from the
+  // CLI, or a server restart. Every fetch path reports a 401 here, so the
+  // shell flips to the login form exactly once no matter how many requests
+  // were in flight when it happened.
+  useEffect(() => onUnauthorized(() => setAuth({ status: "anonymous" })), []);
+
+  // Safari suspends a backgrounded tab, so a session can expire while the app
+  // is not running and the first thing the user sees on return is a screen of
+  // stale numbers. Re-probing on return costs one request.
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void refresh();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [refresh]);
+
+  return { auth, reachable, refresh };
 }

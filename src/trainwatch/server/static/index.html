@@ -15,8 +15,13 @@
     <meta name="theme-color" content="#04070a" />
     <meta name="color-scheme" content="dark" />
     <link rel="manifest" href="/manifest.webmanifest" />
-    <link rel="apple-touch-icon" href="/icon.svg" />
+    <!-- iOS does not support SVG here and does not fall back to the manifest:
+         it screenshots the page and uses that as the home-screen tile. A PNG
+         is therefore load-bearing, because installing to the home screen is
+         what exempts this app from Safari's 7-day storage eviction. -->
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
     <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+    <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png" />
 
     <!--
       Three voices: Bricolage Grotesque (display), Manrope (body),
@@ -34,8 +39,8 @@
       crossorigin
     />
     <link rel="preload" href="/fonts/manrope-400-700.woff2" as="font" type="font/woff2" crossorigin />
-    <script type="module" crossorigin src="/assets/index-C-gg3k-t.js"></script>
-    <link rel="stylesheet" crossorigin href="/assets/index-BiBJjohb.css">
+    <script type="module" crossorigin src="/assets/index-DEgcqPuZ.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-CpS5y5uG.css">
   </head>
   <body>
     <div id="root"></div>
