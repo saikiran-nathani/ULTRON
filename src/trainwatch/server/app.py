@@ -28,6 +28,7 @@ import socket
 import subprocess
 import threading
 import time
+import weakref
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -45,8 +46,10 @@ from ..heartbeat import read_heartbeat
 from ..hub import Hub
 from ..security import SecurityGuard, resolve_allowed_hosts
 from ..store import Store
+from ..sync import Sync
 from .auth_api import AuthGuard, build_auth_router
 from .hub_api import build_hub_router
+from .sync_api import build_sync_router
 from .telemetry_api import build_telemetry_router
 
 log = logging.getLogger("trainwatch.server")
@@ -72,12 +75,40 @@ STREAM_MAX_IDLE = 15.0
 
 
 class StorePool:
-    """One SQLite connection per thread."""
+    """One SQLite connection per thread.
+
+    `_all` is a WeakSet, and that is a bug fix rather than a style choice.
+
+    It was a list, so it held a strong reference to every connection ever
+    created. Worker threads are not permanent — anyio retires idle ones — so
+    each new thread opened a fresh connection that could then never be
+    collected, because the list still pointed at it. Each SQLite connection is
+    three file descriptors (db, -wal, -shm).
+
+    The hub died after 6h30m with `OSError: [Errno 24] Too many open files`,
+    245 of its 269 descriptors pointing at `trainwatch.db`. It kept running and
+    kept listening; it just could not allocate a descriptor for an accepted
+    socket, so every request was reset. launchd reported it healthy throughout,
+    and a heartbeat would have too — "up but serving nothing" is invisible to
+    anything that only asks whether the process exists.
+
+    Two things made it land when it did rather than in a year:
+
+    * a supervised job's `maxfiles` is **256**, not the 1,048,576 an
+      interactive shell gets. Another instance of "a supervised unit inherits
+      almost nothing" — this time the resource limits.
+    * nothing was watching from outside.
+
+    With a WeakSet, a retired thread's `threading.local` slot is the last
+    reference; it drops, the object is collected, and sqlite3 closes the files
+    in its deallocator. `close_all()` still closes whatever is alive at
+    shutdown, which is all it was ever for.
+    """
 
     def __init__(self, path: Path) -> None:
         self._path = path
         self._local = threading.local()
-        self._all: list[Store] = []
+        self._all: weakref.WeakSet[Store] = weakref.WeakSet()
         self._lock = threading.Lock()
 
     def get(self) -> Store:
@@ -86,12 +117,14 @@ class StorePool:
             store = Store(self._path)
             self._local.store = store
             with self._lock:
-                self._all.append(store)
+                self._all.add(store)
         return store
 
     def close_all(self) -> None:
         with self._lock:
-            for store in self._all:
+            # list() first: iterating a WeakSet while objects are being collected
+            # raises RuntimeError, and shutdown is exactly when that happens.
+            for store in list(self._all):
                 try:
                     store.close()
                 except Exception:
@@ -100,12 +133,17 @@ class StorePool:
 
 
 class AuthPool:
-    """One Auth (and therefore one SQLite connection) per worker thread."""
+    """One Auth (and therefore one SQLite connection) per worker thread.
+
+    `_all` is a WeakSet for the reason spelled out on `StorePool`: as a list it
+    leaked a connection per retired worker thread until the process ran out of
+    file descriptors.
+    """
 
     def __init__(self, path: Path) -> None:
         self._path = path
         self._local = threading.local()
-        self._all: list[Auth] = []
+        self._all: weakref.WeakSet[Auth] = weakref.WeakSet()
         self._lock = threading.Lock()
 
     def get(self) -> Auth:
@@ -114,12 +152,14 @@ class AuthPool:
             auth = Auth(self._path)
             self._local.auth = auth
             with self._lock:
-                self._all.append(auth)
+                self._all.add(auth)
         return auth
 
     def close_all(self) -> None:
         with self._lock:
-            for auth in self._all:
+            # list() first: iterating a WeakSet while objects are being collected
+            # raises RuntimeError, and shutdown is exactly when that happens.
+            for auth in list(self._all):
                 try:
                     auth.close()
                 except Exception:
@@ -127,14 +167,54 @@ class AuthPool:
             self._all.clear()
 
 
+class SyncPool:
+    """One Sync (and therefore one SQLite connection) per worker thread.
+
+    `_all` is a WeakSet for the reason spelled out on `StorePool`: as a list it
+    leaked a connection per retired worker thread until the process ran out of
+    file descriptors.
+    """
+
+    def __init__(self, path: Path) -> None:
+        self._path = path
+        self._local = threading.local()
+        self._all: weakref.WeakSet[Sync] = weakref.WeakSet()
+        self._lock = threading.Lock()
+
+    def get(self) -> Sync:
+        sync: Sync | None = getattr(self._local, "sync", None)
+        if sync is None:
+            sync = Sync(self._path)
+            self._local.sync = sync
+            with self._lock:
+                self._all.add(sync)
+        return sync
+
+    def close_all(self) -> None:
+        with self._lock:
+            # list() first: iterating a WeakSet while objects are being collected
+            # raises RuntimeError, and shutdown is exactly when that happens.
+            for sync in list(self._all):
+                try:
+                    sync.close()
+                except Exception:
+                    log.debug("closing pooled sync failed", exc_info=True)
+            self._all.clear()
+
+
 class HubPool:
-    """One Hub (and therefore one SQLite connection) per worker thread."""
+    """One Hub (and therefore one SQLite connection) per worker thread.
+
+    `_all` is a WeakSet for the reason spelled out on `StorePool`: as a list it
+    leaked a connection per retired worker thread until the process ran out of
+    file descriptors.
+    """
 
     def __init__(self, path: Path, blob_dir: Path) -> None:
         self._path = path
         self._blob_dir = blob_dir
         self._local = threading.local()
-        self._all: list[Hub] = []
+        self._all: weakref.WeakSet[Hub] = weakref.WeakSet()
         self._lock = threading.Lock()
 
     def get(self) -> Hub:
@@ -143,12 +223,14 @@ class HubPool:
             hub = Hub(self._path, self._blob_dir)
             self._local.hub = hub
             with self._lock:
-                self._all.append(hub)
+                self._all.add(hub)
         return hub
 
     def close_all(self) -> None:
         with self._lock:
-            for hub in self._all:
+            # list() first: iterating a WeakSet while objects are being collected
+            # raises RuntimeError, and shutdown is exactly when that happens.
+            for hub in list(self._all):
                 try:
                     hub.close()
                 except Exception:
@@ -162,6 +244,7 @@ def create_app(config: Config | None = None) -> FastAPI:
     pool = StorePool(cfg.db_path)
     hub_pool = HubPool(cfg.db_path, cfg.blob_dir)
     auth_pool = AuthPool(cfg.db_path)
+    sync_pool = SyncPool(cfg.db_path)
     sampler = GpuSampler(Store(cfg.db_path), interval=5.0)
     allowed_hosts = resolve_allowed_hosts(cfg.allowed_hosts)
 
@@ -230,6 +313,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             pool.close_all()
             hub_pool.close_all()
             auth_pool.close_all()
+            sync_pool.close_all()
 
     app = FastAPI(
         title="trainwatch",
@@ -492,6 +576,7 @@ def create_app(config: Config | None = None) -> FastAPI:
     # Registered before the SPA catch-all below: route order decides, and
     # `/{full_path:path}` would otherwise match every /api/... write.
     app.include_router(build_hub_router(hub_pool.get))
+    app.include_router(build_sync_router(sync_pool.get))
 
     # ── static dashboard ─────────────────────────────────────────────────
 

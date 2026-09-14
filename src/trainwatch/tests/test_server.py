@@ -8,6 +8,7 @@ from collections.abc import Iterator
 import pytest
 from fastapi.testclient import TestClient
 
+from src.trainwatch.auth import Auth
 from src.trainwatch.config import Config
 from src.trainwatch.server.app import create_app
 from src.trainwatch.store import Store
@@ -156,9 +157,21 @@ def test_training_telemetry_stays_read_only(client: TestClient) -> None:
       `test_telemetry_refuses_a_browser_session`, which tests the real
       property directly: the route requires a machine token and refuses a
       cookie-borne identity outright, owner included.
+    - `/api/sync/*` writes `sync_records`, `sync_devices` and `sync_log` —
+      the personal dataset, partitioned by `owner_id`. It touches no run,
+      metric, event or GPU row, and it *cannot*: the sync layer stores opaque
+      JSON keyed by `(collection, record_id)` and has no access to a Store.
+      Asserted directly by
+      `test_sync_writes_cannot_touch_a_training_record`, rather than resting
+      on this list.
 
     Testing the property beats testing the proxy. Everything else stays
     read-only.
+
+    A note on this allowlist, because it is the kind that rots: it is only
+    honest while every entry has a paragraph above saying why that route
+    cannot falsify a training record, AND a test asserting it. Adding a path
+    here to make this test pass is how the invariant becomes decoration.
     """
     schema = client.get("/api/openapi.json").json()
     offenders = [
@@ -178,7 +191,73 @@ def _is_hub_path(path: str) -> bool:
 
 def _may_write(path: str) -> bool:
     """Routes allowed to accept a mutation. See the invariant's docstring."""
-    return _is_hub_path(path) or path.startswith(("/api/auth", "/api/telemetry"))
+    return _is_hub_path(path) or path.startswith(
+        ("/api/auth", "/api/telemetry", "/api/sync")
+    )
+
+
+def test_sync_writes_cannot_touch_a_training_record(client: TestClient, cfg: Config) -> None:
+    """The property behind the exemption above, asserted rather than assumed.
+
+    A sync push is an authenticated browser write. If it could reach `runs`,
+    `metrics`, `events` or `gpu`, a session cookie would be able to falsify
+    training history — which is the one thing the read-only invariant exists
+    to prevent.
+
+    Checked against the tables, not the routes: a future route that wrote a
+    metric would pass the allowlist and fail this.
+    """
+    from src.trainwatch.hlc import format_hlc
+    from src.trainwatch.store import connect
+
+    with Auth(cfg.db_path) as auth:
+        auth.create_user("owner", "correct-horse-battery", role="owner")
+
+    resp = client.post(
+        "/api/auth/login",
+        json={"username": "owner", "password": "correct-horse-battery"},
+        headers={"X-Trainwatch": "1"},
+    )
+    assert resp.status_code == 200, resp.text
+    headers = {"x-csrf-token": client.cookies["tw_csrf"], "X-Trainwatch": "1"}
+
+    db = connect(cfg.db_path)
+    # A literal tuple defined three lines up; there is no input here to inject.
+    training = ("runs", "metrics", "events", "gpu")
+    before = {t: db.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in training}  # noqa: S608
+
+    pushed = client.post(
+        "/api/sync?device=browser",
+        json={
+            "changes": [
+                {
+                    "collection": "runs",  # deliberately named like a training table
+                    "id": "r1",
+                    "hlc": format_hlc(1_789_344_000_000, 0, "browser"),
+                    "body": {"name": "forged", "status": "finished", "last_step": 99999},
+                }
+            ]
+        },
+        headers=headers,
+    )
+    assert pushed.status_code == 200, pushed.text
+    assert pushed.json()["accepted"] == ["runs/r1"]  # stored, as a sync record
+
+    after = {t: db.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in training}  # noqa: S608
+    db.close()
+
+    assert after == before, (
+        f"a sync push changed a training table: {before} -> {after}. A collection "
+        "named 'runs' must land in sync_records, not in the runs table."
+    )
+    # The pushed record deliberately uses collection "runs" AND the id of the
+    # fixture's real run, so the two collide as hard as they can. The run the
+    # dashboard reports must still be the genuine one, field for field.
+    run = client.get("/api/state").json()["run"]
+    assert run is not None
+    assert run["name"] == "run_042", f"the forged body overwrote the real run: {run}"
+    assert run["last_step"] == 299, "the forged last_step reached the training record"
+    assert run["status"] == "running"
 
 
 def test_the_hub_half_does_have_writes(client: TestClient) -> None:

@@ -48,6 +48,23 @@ LABEL = "com.trainwatch"
 # applied to every *other* command, which is the half that is easy to miss.
 _PATH = "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
+# File-descriptor ceiling for the unit.
+#
+# A supervised job does NOT inherit your shell's limit. `launchctl limit
+# maxfiles` is **256** where an interactive shell gets 1,048,576, and systemd's
+# default is similarly modest. Same lesson as _PATH above, one resource along:
+# a unit inherits almost nothing, and the things it does inherit are the
+# restrictive versions.
+#
+# 256 is not a lot for a server holding a SQLite connection per worker thread
+# (three descriptors each: db, -wal, -shm) while also serving sockets. The hub
+# hit it after 6h30m and spent the rest of the day accepting connections it
+# could not answer — launchd reporting it healthy throughout, because the
+# process was running. See StorePool in server/app.py for the leak that got it
+# there; this raises the ceiling so the next leak has further to travel and
+# more time to be noticed.
+_MAX_FILES = 4096
+
 
 @dataclass(frozen=True)
 class Unit:
@@ -142,7 +159,15 @@ def _launchd(unit: Unit, *, repo: Path, env: dict[str, str]) -> str:
     </dict>
     <key>StandardOutPath</key><string>{repo}/var/{unit.name}.log</string>
     <key>StandardErrorPath</key><string>{repo}/var/{unit.name}.log</string>
-    <key>ProcessType</key><string>Background</string>{env_block}
+    <key>ProcessType</key><string>Background</string>
+    <key>SoftResourceLimits</key>
+    <dict>
+        <key>NumberOfFiles</key><integer>{_MAX_FILES}</integer>
+    </dict>
+    <key>HardResourceLimits</key>
+    <dict>
+        <key>NumberOfFiles</key><integer>{_MAX_FILES}</integer>
+    </dict>{env_block}
 </dict>
 </plist>
 """
@@ -168,7 +193,8 @@ Type=simple
 WorkingDirectory="{repo}"
 ExecStart={argv}
 Restart=on-failure
-RestartSec=5{environment}
+RestartSec=5
+LimitNOFILE={_MAX_FILES}{environment}
 
 [Install]
 WantedBy=default.target

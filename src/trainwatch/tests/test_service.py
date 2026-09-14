@@ -103,3 +103,22 @@ def test_units_carry_a_path_that_includes_usr_local_bin(tmp_path: Path) -> None:
 def test_an_explicit_path_overrides_the_default(tmp_path: Path) -> None:
     text = service.render("hub", repo=tmp_path, env={"PATH": "/custom"}, system="Linux")
     assert 'Environment="PATH=/custom"' in text
+
+
+def test_units_raise_the_file_descriptor_ceiling(tmp_path: Path) -> None:
+    """A supervised job's maxfiles is 256, not the shell's 1,048,576.
+
+    Same class as the PATH test above: a unit inherits almost nothing, and
+    what it does inherit is the restrictive version. The hub exhausted 256
+    descriptors after 6h30m and spent the rest of the day accepting
+    connections it could not answer, with launchd reporting it healthy the
+    whole time.
+    """
+    plist = service.render("hub", repo=tmp_path, system="Darwin")
+    assert "<key>NumberOfFiles</key>" in plist
+    assert "SoftResourceLimits" in plist and "HardResourceLimits" in plist
+
+    unit = service.render("hub", repo=tmp_path, system="Linux")
+    assert f"LimitNOFILE={service._MAX_FILES}" in unit
+
+    assert service._MAX_FILES > 256, "the ceiling must actually be raised"
