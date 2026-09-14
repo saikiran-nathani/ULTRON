@@ -275,18 +275,47 @@ dataset loading into a slowdown you can recover from:
 swapon --show
 ```
 
-The installer's default will be small. Enlarge it:
+The installer's default will be small (4 G here). **Add a second swap file rather than
+resizing the first.**
+
+> ⚠️ **Do not `swapoff` the existing swap to resize it.** That was the instruction here
+> previously and it can kill the box mid-fix. `swapoff` has to page everything currently
+> swapped back into RAM before it returns — and the capacity sweeps have already driven swap
+> to ~2.8 G in use. Paging 2.8 G back into ~5.7 G of free RAM is how you get an OOM-kill
+> during the command that was supposed to prevent OOM-kills, on a machine you are sitting in
+> front of with an editor open.
+>
+> Adding a second file needs no eviction, is instant, and the kernel simply uses both.
 
 ```bash
-sudo swapoff /swap.img && sudo fallocate -l 16G /swap.img && sudo chmod 600 /swap.img && sudo mkswap /swap.img && sudo swapon /swap.img
-```
-
-```bash
+# Check what exists first — size and path both matter.
+swapon --show
 free -h
 ```
 
-Ubuntu's installer already put `/swap.img` in `/etc/fstab`, so this survives reboot — but
-confirm the path matches what `swapon --show` reported. Older installs use `/swapfile`.
+```bash
+# Add 12 G alongside the existing 4 G, for 16 G total.
+sudo fallocate -l 12G /swap2.img
+sudo chmod 600 /swap2.img
+sudo mkswap /swap2.img
+sudo swapon /swap2.img
+```
+
+Make it persist, then prove it:
+
+```bash
+echo '/swap2.img none swap sw 0 0' | sudo tee -a /etc/fstab
+sudo swapon --show          # expect two entries
+free -h                     # expect ~16 G total swap
+```
+
+`fallocate` fails on some filesystems (notably btrfs); if it does, use
+`sudo dd if=/dev/zero of=/swap2.img bs=1M count=12288 status=progress` instead.
+
+Ubuntu's installer already put `/swap.img` in `/etc/fstab`, so the original survives reboot —
+but confirm the path matches what `swapon --show` reported. Older installs use `/swapfile`.
+The `/etc/fstab` line above is what makes the *new* one survive; without it the box comes back
+after a reboot with 4 G again, looking configured and not being.
 
 ### Asus-specific (optional)
 
