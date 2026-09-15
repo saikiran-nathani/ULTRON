@@ -89,9 +89,61 @@ did() {
 # `ssh -n` so a command that reads stdin cannot swallow the rest of this
 # script — a classic way for a loop over hosts to silently run once.
 sh_() { ssh -n -o BatchMode=yes "$HOST" "$@"; }
+# Every root command is QUEUED and run once, at the end, in a single remote
+# shell attached to a terminal. Two reasons, and the first one is a bug this
+# script actually hit:
+#
+#   * `ssh -n` gives sudo no terminal, so it answers "a terminal is required to
+#     authenticate" and every change fails — which is how the first --apply run
+#     ended, with a dd permission error and nothing done.
+#   * `ssh -t` per command would work and would ask for the password TEN times,
+#     because sudo's timestamp is per-TTY by default and each ssh gets a new
+#     one. Ten prompts is how someone starts pasting their password into
+#     things without reading them.
+#
+# So: collect, upload, one `ssh -t sudo bash`, one prompt. The password is
+# typed at your terminal into sudo, and is never handled by this script.
+SUDO_SCRIPT="$(mktemp -t tuf-apply)"
+SUDO_QUEUED=0
+printf 'set -euo pipefail\n' > "$SUDO_SCRIPT"
+
 sudo_() {
   if [ "$APPLY" -eq 1 ]; then
-    ssh -n -o BatchMode=yes "$HOST" "sudo $*"
+    printf '%s\n' "$*" >> "$SUDO_SCRIPT"
+    SUDO_QUEUED=$((SUDO_QUEUED + 1))
+  fi
+}
+
+queued() {
+  RESULTS+=("  queued  $1")
+  printf '  \033[36mqueued\033[0m  %s\n' "$1"
+}
+
+flush_sudo() {
+  [ "$APPLY" -eq 1 ] || return 0
+  if [ "$SUDO_QUEUED" -eq 0 ]; then
+    rm -f "$SUDO_SCRIPT"
+    return 0
+  fi
+  echo
+  bold "Applying $SUDO_QUEUED root commands on '$HOST' — sudo will ask for the TUF's password"
+  # Uploaded as a file rather than piped: `ssh -t` makes stdin the terminal, so
+  # a piped script and an interactive password prompt cannot both use it.
+  ssh -o BatchMode=yes "$HOST" 'cat > /tmp/tuf-apply.sh' < "$SUDO_SCRIPT"
+  rm -f "$SUDO_SCRIPT"
+  if ssh -t "$HOST" 'sudo bash /tmp/tuf-apply.sh; rc=$?; rm -f /tmp/tuf-apply.sh; exit $rc'; then
+    echo
+    bold "Applied. Re-checking, so what follows is measured and not assumed."
+    echo
+    # The verification is this same script in report-only mode — the strongest
+    # form available, because there is no second implementation of the checks
+    # to drift away from the first.
+    # TUF_HOST, not a positional: the argument parser above only knows
+    # flags, so a bare hostname would land in the unknown-option branch.
+    exec env TUF_HOST="$HOST" "$0"
+  else
+    fail "the root commands did not all succeed — nothing below has been re-checked"
+    exit 1
   fi
 }
 
@@ -192,8 +244,7 @@ else
     # Idempotent fstab append: without this the box reboots back to 4 G,
     # looking configured and not being.
     sudo_ "grep -q '^/swap2.img' /etc/fstab || echo '/swap2.img none swap sw 0 0' >> /etc/fstab"
-    NEW_KB="$(sh_ "awk '/^SwapTotal/{print \$2}' /proc/meminfo")"
-    did "swap is now $((NEW_KB / 1024 / 1024)) G, and /swap2.img is in fstab"
+    queued "add /swap2.img (12 G) and record it in fstab"
   fi
 fi
 
@@ -212,7 +263,7 @@ HandleLidSwitchDocked=ignore
 HandleLidSwitchExternalPower=ignore
 CONF"
     sudo_ 'systemctl restart systemd-logind'
-    did "lid switch ignored"
+    queued "ignore the lid switch"
   fi
 fi
 
@@ -224,7 +275,7 @@ else
   todo "sleep targets not masked — something other than the lid can still suspend it"
   if [ "$APPLY" -eq 1 ]; then
     sudo_ 'systemctl mask sleep.target suspend.target hibernate.target hybrid-sleep.target'
-    did "sleep targets masked"
+    queued "mask the sleep targets"
   fi
 fi
 
@@ -237,7 +288,7 @@ else
   todo "linger is OFF — user units will die at logout"
   if [ "$APPLY" -eq 1 ]; then
     sudo_ "loginctl enable-linger $REMOTE_USER"
-    did "linger enabled"
+    queued "enable linger for $REMOTE_USER"
   fi
 fi
 
@@ -325,6 +376,12 @@ else
              6. Then re-run this script; the two checks above should go green
 EOF
 fi
+
+# ── apply, once, with one password prompt ────────────────────────────────
+# Placed here on purpose: every check above has already run and reported, so a
+# queue that turns out to be empty costs nothing and a queue that is not empty
+# is applied with the full picture already printed.
+flush_sudo
 
 # ── summary ──────────────────────────────────────────────────────────────
 echo
