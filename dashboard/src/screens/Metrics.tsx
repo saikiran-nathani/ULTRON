@@ -9,14 +9,11 @@
 import { useMemo, useState } from "react";
 import { Activity } from "lucide-react";
 import { ScreenShell } from "@/components/ScreenShell";
-import { Card } from "@/ui/Card";
-import { Tabs } from "@/ui/Tabs";
-import { LineChart, Sparkline } from "@/ui/Chart";
-import { EmptyState } from "@/ui/EmptyState";
 import { Stagger, Reveal } from "@/lib/motion";
 import { useGroups, useSeries } from "@/lib/hooks";
 import { metric as fmtMetric, shortKey, titleKey } from "@/lib/format";
 import type { State } from "@/lib/api";
+import { Card, EmptyState, LineChart, Tabs, TimeSeriesSparkline } from "@/components/ui";
 
 const GROUP_COLOR: Record<string, string> = {
   scalars: "var(--color-accent)",
@@ -113,7 +110,7 @@ export function Metrics({ state, actions }: { state: State; actions?: React.Reac
                     className="mt-3"
                   />
                 ) : (
-                  <Sparkline
+                  <TimeSeriesSparkline
                     data={data}
                     color={color}
                     height={40}

@@ -104,7 +104,13 @@ const linePath = (data: Point[], s: Scale) =>
 
 /* ── Sparkline ─────────────────────────────────────────────────────────── */
 
-export function Sparkline({
+/** A sparkline over timestamped points, sharing `LineChart`'s geometry and log
+ * scaling. Renamed from `Sparkline` when the two kits merged: the ported kit
+ * already had a `Sparkline` taking a plain `number[]`, and they are different
+ * APIs for different data rather than two versions of one component. Naming
+ * them apart is what stops a caller passing the wrong shape and getting an
+ * empty chart. */
+export function TimeSeriesSparkline({
   data,
   color = "var(--color-accent)",
   height = 34,

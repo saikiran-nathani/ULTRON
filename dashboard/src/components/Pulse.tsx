@@ -6,11 +6,11 @@
  * the display face and the heartbeat is a ring that visibly drains toward the
  * liveness timeout rather than a number you have to read.
  */
-import { ProgressRing } from "@/ui/Ring";
 import { CountUp, usePrefersReducedMotion } from "@/lib/motion";
 import { statusOf } from "@/lib/status";
 import { duration } from "@/lib/format";
 import type { Heartbeat, Run, Verdict } from "@/lib/api";
+import { ProgressRing } from "@/components/ui";
 
 export function Pulse({
   status,

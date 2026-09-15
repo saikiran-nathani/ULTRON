@@ -11,10 +11,9 @@ import { useMemo, useState } from "react";
 import { BellOff } from "lucide-react";
 import { ScreenShell } from "@/components/ScreenShell";
 import { EventList } from "@/components/EventList";
-import { Tabs } from "@/ui/Tabs";
-import { Card } from "@/ui/Card";
 import { Reveal, Stagger } from "@/lib/motion";
 import type { State } from "@/lib/api";
+import { Card, Tabs } from "@/components/ui";
 
 const FILTERS = [
   { id: "all", label: "All" },

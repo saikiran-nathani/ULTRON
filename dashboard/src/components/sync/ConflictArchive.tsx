@@ -40,10 +40,6 @@ import {
   TriangleAlert,
   Undo2,
 } from "lucide-react";
-import { Card } from "@/ui/Card";
-import { Button, IconButton } from "@/ui/Button";
-import { Chip } from "@/ui/Chip";
-import { EmptyState } from "@/ui/EmptyState";
 import { Reveal, Stagger } from "@/lib/motion";
 import { cn } from "@/lib/cn";
 import { dayClock } from "@/lib/format";
@@ -59,6 +55,7 @@ import {
   type SyncVersion,
   type VersionRole,
 } from "@/lib/syncApi";
+import { Button, Card, Chip, EmptyState, IconButton } from "@/components/ui";
 
 /** What the caller is handed when the user confirms a restore. */
 export interface RestoreRequest {

@@ -20,11 +20,6 @@ import {
   Upload,
 } from "lucide-react";
 import { ScreenShell } from "@/components/ScreenShell";
-import { Card } from "@/ui/Card";
-import { Button, IconButton } from "@/ui/Button";
-import { Chip } from "@/ui/Chip";
-import { CopyButton } from "@/ui/CopyButton";
-import { EmptyState } from "@/ui/EmptyState";
 import { Reveal, Stagger } from "@/lib/motion";
 import { cn } from "@/lib/cn";
 import { bytes, dayClock } from "@/lib/format";
@@ -36,6 +31,7 @@ import {
   isSecureContext,
   readClipboard,
 } from "@/lib/hub";
+import { Button, Card, Chip, CopyButton, EmptyState, IconButton } from "@/components/ui";
 
 export function ClipScreen({ hub, refresh }: { hub: HubState | null; refresh: () => void }) {
   const [draft, setDraft] = useState("");

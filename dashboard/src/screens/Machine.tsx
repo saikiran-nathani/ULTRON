@@ -11,16 +11,12 @@ import { useState } from "react";
 import { Boxes, Cpu, Network, Terminal } from "lucide-react";
 import { ScreenShell } from "@/components/ScreenShell";
 import { GpuStrip } from "@/components/GpuStrip";
-import { Card, CardHead } from "@/ui/Card";
-import { Tabs } from "@/ui/Tabs";
-import { LineChart } from "@/ui/Chart";
-import { Chip } from "@/ui/Chip";
-import { EmptyState } from "@/ui/EmptyState";
 import { Stagger, Reveal } from "@/lib/motion";
 import { useGpuHistory, useSystem } from "@/lib/hooks";
 import { bytes, clock, dayClock } from "@/lib/format";
 import type { Gpu, State } from "@/lib/api";
-import type { Point } from "@/ui/Chart";
+import type { Point } from "@/components/ui";
+import { Card, CardHead, Chip, EmptyState, LineChart, Tabs } from "@/components/ui";
 
 const WINDOWS = [
   { id: "900", label: "15m" },

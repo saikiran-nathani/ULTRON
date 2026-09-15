@@ -1,23 +1,22 @@
 import type { ReactNode } from "react";
 import { cn } from "@/lib/cn";
 
-/** Pill badge tinted to any token colour. Border 35% / bg 10% / text full. */
-export function Chip({
-  children,
-  color,
-  className,
-  dot,
-}: {
+interface ChipProps {
   children: ReactNode;
+  /** Any CSS colour — a token var or a `color-mix`. Defaults to the accent. */
   color?: string;
   className?: string;
+  /** A glowing dot before the label, for live/status chips. */
   dot?: boolean;
-}) {
+}
+
+/** Pill badge, accent-tinted by default or tinted to any token colour. */
+export function Chip({ children, color, className, dot }: ChipProps) {
   const c = color ?? "var(--color-accent)";
   return (
     <span
       className={cn(
-        "inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider",
+        "inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider",
         className,
       )}
       style={{

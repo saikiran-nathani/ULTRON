@@ -32,6 +32,7 @@
  */
 
 import assert from "node:assert/strict";
+import { readFile, stat } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import test from "node:test";
@@ -294,4 +295,50 @@ test("activate deletes caches from older versions", async () => {
   // Nothing to assert on the stub beyond it completing without throwing: the
   // point is that the handler runs its cleanup path at all.
   assert.ok(true);
+});
+
+
+test("every precached path exists on disk", async () => {
+  // The drift this catches actually happened. Changing the theme deleted
+  // `bricolage-400-600.woff2` and added `fraunces-latin-var.woff2`, and the
+  // precache list still named the deleted one.
+  //
+  // Install would have *succeeded*: each entry is added individually precisely
+  // so one 404 cannot abort the whole thing. So the app would have installed
+  // clean, reported itself ready for offline use, and had no display font the
+  // first time it opened without a network. Absence of evidence rendering as
+  // success, in the one code path nobody watches.
+  //
+  // Reading the list out of the source rather than duplicating it here, so
+  // this test cannot itself go stale.
+  const source = await readFile(new URL("../public/sw.js", import.meta.url), "utf8");
+  const block = /const PRECACHE = \[([\s\S]*?)\];/.exec(source);
+  assert.ok(block, "PRECACHE list not found — did it get renamed?");
+
+  const paths = [...block[1].matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+  assert.ok(paths.length >= 5, `expected a real list, got ${paths.length}`);
+
+  const missing = [];
+  for (const p of paths) {
+    // "/" is the built index.html, which only exists after a build.
+    if (p === "/") continue;
+    const onDisk = new URL(`../public${p}`, import.meta.url);
+    try {
+      await stat(onDisk);
+    } catch {
+      missing.push(p);
+    }
+  }
+  assert.deepEqual(missing, [], `precached but not in public/: ${missing.join(", ")}`);
+});
+
+test("the cache version was bumped when the precache list changed", async () => {
+  // The worker's own comment requires it: the old cache is deleted on activate,
+  // so a version that does not move leaves every already-installed device
+  // serving the previous list from its old cache — including a font that is no
+  // longer in the build.
+  const source = await readFile(new URL("../public/sw.js", import.meta.url), "utf8");
+  const version = /const VERSION = "([^"]+)"/.exec(source);
+  assert.ok(version, "VERSION not found");
+  assert.notEqual(version[1], "tw-v1", "the list changed for AZIMUTH; the version must move with it");
 });

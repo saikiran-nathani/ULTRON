@@ -1,10 +1,9 @@
 import { BellOff, BellRing } from "lucide-react";
-import { Card } from "@/ui/Card";
-import { EmptyState } from "@/ui/EmptyState";
 import { Stagger, Reveal } from "@/lib/motion";
 import { levelColor } from "@/lib/status";
 import { dayClock } from "@/lib/format";
 import type { TwEvent } from "@/lib/api";
+import { Card, EmptyState } from "@/components/ui";
 
 export function EventList({
   events,

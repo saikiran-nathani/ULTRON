@@ -7,12 +7,10 @@
  * "got slower" between two identical configs.
  */
 import { Thermometer, Zap, Gauge, MemoryStick, TriangleAlert } from "lucide-react";
-import { Card } from "@/ui/Card";
-import { ProgressBar } from "@/ui/Ring";
-import { Chip } from "@/ui/Chip";
 import { tempColor } from "@/lib/status";
 import { cn } from "@/lib/cn";
 import type { Gpu } from "@/lib/api";
+import { Card, Chip, ProgressBar } from "@/components/ui";
 
 const THROTTLE_LABEL: Record<string, string> = {
   sw_thermal: "thermal (software)",

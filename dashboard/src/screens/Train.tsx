@@ -8,13 +8,13 @@
  */
 import { useState } from "react";
 import type { ReactNode } from "react";
-import { Tabs } from "@/ui/Tabs";
 import { ScreenShell } from "@/components/ScreenShell";
 import { Watch } from "./Watch";
 import { Metrics } from "./Metrics";
 import { Machine } from "./Machine";
 import { Alerts } from "./Alerts";
 import type { State } from "@/lib/api";
+import { Tabs } from "@/components/ui";
 
 type Pane = "watch" | "metrics" | "machine" | "alerts";
 

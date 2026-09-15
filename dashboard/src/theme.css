@@ -60,6 +60,15 @@
   --color-line-strong: rgba(195, 169, 245, 0.6);
   --color-hairline: rgba(154, 149, 168, 0.1);
 
+  /* ── Two slots beyond the contract, because the kit needed them and the
+     alternative was a hard-coded colour in a component ── */
+  /* Modal scrim. `bg-black/65` works on a dark canvas and is wrong on any
+     light theme, which is precisely the coupling tokens exist to remove. */
+  --color-scrim: rgba(4, 3, 8, 0.66);
+  /* The specular sweep on a primary button. White is right on a dark theme and
+     too hot on a light one, so it is a token rather than `via-white/25`. */
+  --color-specular: rgba(236, 235, 246, 0.24);
+
   /* ── Radii ── */
   --radius-xs: 5px;
   --radius-sm: 9px;

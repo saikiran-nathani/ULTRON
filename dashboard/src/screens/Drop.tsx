@@ -18,15 +18,11 @@ import {
   Trash2,
 } from "lucide-react";
 import { ScreenShell } from "@/components/ScreenShell";
-import { Card } from "@/ui/Card";
-import { Button, IconButton } from "@/ui/Button";
-import { Chip } from "@/ui/Chip";
-import { Tabs } from "@/ui/Tabs";
-import { EmptyState } from "@/ui/EmptyState";
 import { Reveal, Stagger } from "@/lib/motion";
 import { cn } from "@/lib/cn";
 import { bytes, dayClock } from "@/lib/format";
 import { type HubFile, type HubLink, type HubState, hubApi } from "@/lib/hub";
+import { Button, Card, Chip, EmptyState, IconButton, Tabs } from "@/components/ui";
 
 export function DropScreen({ hub, refresh }: { hub: HubState | null; refresh: () => void }) {
   const [tab, setTab] = useState("files");

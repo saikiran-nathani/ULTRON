@@ -33,11 +33,6 @@ import {
   Tablet,
   TriangleAlert,
 } from "lucide-react";
-import { Card } from "@/ui/Card";
-import { Button, IconButton } from "@/ui/Button";
-import { Chip } from "@/ui/Chip";
-import { EmptyState } from "@/ui/EmptyState";
-import { Stat } from "@/ui/Stat";
 import { Reveal, Stagger } from "@/lib/motion";
 import { cn } from "@/lib/cn";
 import { dayClock, shortDuration } from "@/lib/format";
@@ -48,6 +43,7 @@ import {
   type SyncDevice,
   type SyncState,
 } from "@/lib/syncApi";
+import { Button, Card, Chip, EmptyState, IconButton, Stat } from "@/components/ui";
 
 type Load =
   | { status: "loading" }

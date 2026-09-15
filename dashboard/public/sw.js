@@ -26,7 +26,7 @@
 
 // Bump on any change to this file or to the precache list. The old cache is
 // deleted on activate, so a stale asset cannot outlive its version.
-const VERSION = "tw-v1";
+const VERSION = "tw-v2";  // v2: AZIMUTH fonts (Fraunces in, Bricolage out)
 const SHELL = `${VERSION}-shell`;
 
 /**
@@ -44,8 +44,13 @@ const PRECACHE = [
   "/icon.svg",
   "/icon-192.png",
   "/apple-touch-icon.png",
-  "/fonts/bricolage-400-600.woff2",
+  // All three type voices, not two. The mono sets every number in the app, so
+  // without it an offline launch renders readings in a fallback face — which
+  // is the one place the design cannot afford a substitute, because tabular
+  // figures are what make a column of numbers line up.
+  "/fonts/fraunces-latin-var.woff2",
   "/fonts/manrope-400-700.woff2",
+  "/fonts/plex-400.woff2",
 ];
 
 self.addEventListener("install", (event) => {

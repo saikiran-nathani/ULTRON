@@ -8,14 +8,11 @@ import { Pulse } from "@/components/Pulse";
 import { GpuStrip } from "@/components/GpuStrip";
 import { EventList } from "@/components/EventList";
 import { ScreenShell } from "@/components/ScreenShell";
-import { Card, CardHead } from "@/ui/Card";
-import { Button } from "@/ui/Button";
-import { Sparkline, LineChart } from "@/ui/Chart";
-import { EmptyState } from "@/ui/EmptyState";
 import { Stagger, Reveal } from "@/lib/motion";
 import { metric as fmtMetric, titleKey } from "@/lib/format";
 import { useSeries } from "@/lib/hooks";
 import type { State } from "@/lib/api";
+import { Button, Card, CardHead, EmptyState, LineChart, TimeSeriesSparkline } from "@/components/ui";
 
 const HEADLINE = ["loss", "grad_norm", "lr", "step_time"] as const;
 
@@ -76,7 +73,7 @@ export function Watch({
                   >
                     {fmtMetric(value, key)}
                   </div>
-                  <Sparkline
+                  <TimeSeriesSparkline
                     data={series[key] ?? []}
                     color={color}
                     height={28}

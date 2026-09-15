@@ -31,10 +31,10 @@
 import { forwardRef, useEffect, useRef, useState } from "react";
 import type { CSSProperties, FormEvent, InputHTMLAttributes, ReactNode } from "react";
 import { Eye, EyeOff, KeyRound, LockKeyhole, Share, ShieldAlert, UserRound } from "lucide-react";
-import { Button } from "@/ui/Button";
 import { LoginError, login } from "@/lib/auth";
 import { usePrefersReducedMotion } from "@/lib/motion";
 import { cn } from "@/lib/cn";
+import { Button } from "@/components/ui";
 
 /**
  * The instrument mark: a live radar, drawn with the bezel primitives.
