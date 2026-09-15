@@ -72,9 +72,31 @@ INTERVAL_SECONDS = 300
 TIMEOUT = 10.0
 
 # Consecutive failures before alerting. One failed probe is a blip — a laptop
-# waking up, a tailnet re-handshake. Three in a row at 5-minute spacing is 15
-# minutes of genuinely not working.
+# waking up, a tailnet re-handshake.
+#
+# This used to say "three in a row at 5-minute spacing is 15 minutes of
+# genuinely not working". Eleven hours of real log says otherwise: 38 samples
+# where 137 were expected, with seven gaps over 11 minutes and one of **three
+# hours**. launchd's StartInterval does not fire while the Mac is asleep and
+# coalesces missed firings into a single catch-up run, so a closed lid is a
+# blind monitor.
+#
+# So three failures is an unknown number of minutes, and — worse — a gap is
+# indistinguishable from a healthy stretch in a log that only records the
+# samples it managed to take. A monitor whose silence reads as health is the
+# exact inversion this file exists to correct, so the gap is now measured and
+# logged explicitly.
+#
+# The real fix is not here. A probe on a machine that sleeps cannot watch a
+# server that does not; that is what the plan's dead man's switch is for, run
+# ON the server and pushing outbound, where silence becomes the alarm rather
+# than the absence of one.
 FAILURES_BEFORE_ALERT = 3
+
+# Log an explicit blind-window line when the gap since the last check exceeds
+# this. Twice the intended 5-minute interval: one late firing is scheduler
+# jitter, two means nobody was watching.
+MAX_QUIET_SECONDS = 600
 
 STATE = ROOT / "var" / "probe-state.json"
 
@@ -220,6 +242,10 @@ def _descriptors() -> str:
         return "fds=?"
 
 
+def _stamp(epoch: float) -> str:
+    return time.strftime("%H:%M", time.localtime(epoch))
+
+
 def _log(line: str) -> None:
     LOG.parent.mkdir(parents=True, exist_ok=True)
     stamp = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -233,11 +259,27 @@ def run_once(*, quiet: bool = False) -> int:
     state = _load_state()
     streak = int(state.get("failures", 0) or 0)
 
+    # Before anything else: say how long nobody was looking. Without this the
+    # log reads as a continuous series of healthy samples, and a three-hour
+    # hole in it looks exactly like three hours of health. The hub was dead for
+    # six hours once while its supervisor reported it running; a monitor that
+    # cannot distinguish "fine" from "unwatched" would not have caught that
+    # either.
+    now = time.time()
+    last_check = float(state.get("last_check", 0) or 0)
+    gap = now - last_check
+    if last_check and gap > MAX_QUIET_SECONDS:
+        _log(
+            f"UNMONITORED for {gap / 60:.0f} min — no probe ran between "
+            f"{_stamp(last_check)} and {_stamp(now)}. The hub may have been down "
+            f"for any part of it and this probe would not know."
+        )
+
     if ok:
         if streak >= FAILURES_BEFORE_ALERT:
             _log(f"RECOVERED {base} — {reason}")
             _notify("trainwatch hub recovered", f"{base}\n{reason}")
-        _save_state({"failures": 0, "last_ok": time.time(), "last_reason": reason})
+        _save_state({"failures": 0, "last_ok": now, "last_check": now, "last_reason": reason})
         # Logged on success too, not only on failure: the trend is the point,
         # and a series with only the bad samples in it cannot show a trend.
         _log(f"ok {base} — {reason} [{_descriptors()}]")
@@ -246,7 +288,7 @@ def run_once(*, quiet: bool = False) -> int:
         return 0
 
     streak += 1
-    _save_state({"failures": streak, "last_fail": time.time(), "last_reason": reason})
+    _save_state({"failures": streak, "last_fail": now, "last_check": now, "last_reason": reason})
     _log(f"FAIL ({streak}) {base} — {reason} [{_descriptors()}]")
     if not quiet:
         print(f"FAIL {base}  {reason}  (consecutive: {streak})", file=sys.stderr)

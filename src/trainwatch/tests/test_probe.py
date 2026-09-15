@@ -224,3 +224,47 @@ def test_the_probe_url_is_overridable(monkeypatch) -> None:
     """So it can point at the TUF once the hub moves there."""
     monkeypatch.setenv("TRAINWATCH_PROBE_URL", "http://tuf:8730/")
     assert probe._urls() == ["http://tuf:8730"]
+
+
+def test_a_blind_window_is_written_down_rather_than_skipped_over(
+    server, tmp_path: Path, monkeypatch
+) -> None:
+    """A gap in the log must not read as a healthy stretch.
+
+    Measured, not imagined: eleven hours of the real log holds 38 samples where
+    137 were expected, with seven gaps over 11 minutes and one of three hours.
+    launchd's `StartInterval` does not fire while the Mac is asleep and
+    coalesces the misses into one catch-up run, so a closed lid is a blind
+    monitor — and a log containing only the samples it managed to take shows
+    that blindness as an unbroken line of `ok`.
+
+    The hub was once dead for six hours while its supervisor reported it
+    running. A monitor that cannot tell "fine" from "nobody was looking" would
+    not have caught that either, which is the whole inversion this file exists
+    to correct.
+    """
+    base, _handler = server
+    monkeypatch.setattr(probe, "STATE", tmp_path / "state.json")
+    monkeypatch.setattr(probe, "LOG", tmp_path / "probe.log")
+    monkeypatch.setattr(probe, "_urls", lambda: [base])
+    monkeypatch.setattr(probe, "_notify", lambda t, b: True)
+
+    assert probe.run_once(quiet=True) == 0
+    log = (tmp_path / "probe.log").read_text()
+    assert "UNMONITORED" not in log, "the first run has nothing to compare against"
+
+    # Rewind the recorded check by three hours: the Mac was asleep.
+    state = json.loads((tmp_path / "state.json").read_text())
+    assert "last_check" in state, "the probe does not record when it last ran"
+    state["last_check"] = state["last_check"] - 3 * 60 * 60
+    (tmp_path / "state.json").write_text(json.dumps(state))
+
+    assert probe.run_once(quiet=True) == 0
+    log = (tmp_path / "probe.log").read_text()
+    assert "UNMONITORED for 180 min" in log, f"the blind window was not reported:\n{log}"
+    assert "may have been down" in log
+
+    # A normal interval says nothing — a line on every run would be noise, and
+    # noise is how a channel gets muted.
+    assert probe.run_once(quiet=True) == 0
+    assert (tmp_path / "probe.log").read_text().count("UNMONITORED") == 1
