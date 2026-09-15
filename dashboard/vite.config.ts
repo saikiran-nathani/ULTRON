@@ -7,6 +7,8 @@ import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import path from "node:path";
 
+const DEV_HUB = process.env.TRAINWATCH_DEV_HUB ?? "https://killerx8143.tail1f999f.ts.net";
+
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   resolve: {
@@ -30,9 +32,16 @@ export default defineConfig({
   },
   server: {
     port: 5173,
+    // The hub moved to the TUF, so `127.0.0.1:8730` is nothing now — and a
+    // dead proxy target does not present as an error: `whoami` fails, the
+    // client resolves its boot state as "open", and the dashboard shows the
+    // no-accounts banner over a box that has an account. Development against a
+    // hub that appears unenrolled is development against the wrong posture.
+    //
+    // Override with TRAINWATCH_DEV_HUB to point at a local hub again.
     proxy: {
-      "/api": { target: "http://127.0.0.1:8730", changeOrigin: true },
-      "/healthz": { target: "http://127.0.0.1:8730", changeOrigin: true },
+      "/api": { target: DEV_HUB, changeOrigin: true, secure: false },
+      "/healthz": { target: DEV_HUB, changeOrigin: true, secure: false },
     },
   },
 });

@@ -14,18 +14,16 @@
  */
 import { useState } from "react";
 import { motion } from "framer-motion";
-import { Activity, ClipboardList, FileText, LogOut, PencilLine, Send, UserRound } from "lucide-react";
+import { LogOut, PencilLine, UserRound } from "lucide-react";
 import { cn } from "@/lib/cn";
 import type { Connection } from "@/lib/api";
+import { BAR, NAV, type ScreenId } from "@/config/nav";
 
-export type Screen = "clip" | "drop" | "notes" | "train";
-
-export const SCREENS: { id: Screen; label: string; icon: typeof Activity }[] = [
-  { id: "clip", label: "Clip", icon: ClipboardList },
-  { id: "drop", label: "Drop", icon: Send },
-  { id: "notes", label: "Notes", icon: FileText },
-  { id: "train", label: "Train", icon: Activity },
-];
+// The taxonomy moved to `config/nav.ts` when the two apps merged: it is read
+// by the shell, the home launcher and both of these navs, and three copies of
+// a screen list is three chances for one of them to be missing a screen.
+export type Screen = ScreenId;
+export { NAV as SCREENS } from "@/config/nav";
 
 const CONN: Record<Connection, { text: string; color: string }> = {
   live: { text: "live", color: "var(--color-good)" },
@@ -69,7 +67,7 @@ export function Sidebar({
       </div>
 
       <nav className="flex flex-col gap-1 px-3">
-        {SCREENS.map((s) => {
+        {NAV.map((s) => {
           const on = s.id === screen;
           const Icon = s.icon;
           const badge = badges?.[s.id] ?? 0;
@@ -184,7 +182,7 @@ export function BottomBar({ screen, onChange, connection, badges }: NavProps) {
   return (
     <nav className="safe-b fixed inset-x-0 bottom-0 z-40 border-t-[0.5px] border-line bg-panel/90 backdrop-blur-xl lg:hidden">
       <div className="mx-auto flex max-w-[560px] items-stretch justify-around px-2 pt-1">
-        {SCREENS.map((s) => {
+        {BAR.map((s) => {
           const on = s.id === screen;
           const Icon = s.icon;
           const badge = badges?.[s.id] ?? 0;

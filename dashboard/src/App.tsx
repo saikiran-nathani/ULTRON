@@ -19,10 +19,15 @@ import { motion } from "framer-motion";
 import { WifiOff } from "lucide-react";
 import { AccountPill, BottomBar, SCREENS, Sidebar, type Screen } from "@/components/Nav";
 import { RunPicker } from "@/components/RunPicker";
-import { ClipScreen } from "@/screens/Clip";
-import { DropScreen } from "@/screens/Drop";
+import { BrainScreen } from "@/screens/Brain";
+import { CaptureScreen } from "@/screens/Capture";
+import { CareerScreen } from "@/screens/Career";
+import { CoursesScreen } from "@/screens/Courses";
+import { HomeScreen } from "@/screens/Home";
+import { LearnScreen } from "@/screens/Learn";
+import { ProjectsScreen } from "@/screens/Projects";
+import { ResearchScreen } from "@/screens/Research";
 import { InstallHint, Login, OpenNotice } from "@/screens/Login";
-import { NotesScreen } from "@/screens/Notes";
 import { Train } from "@/screens/Train";
 import { useLiveState } from "@/lib/api";
 import { logout } from "@/lib/auth";
@@ -98,7 +103,7 @@ function Workspace({
   identity: string | null;
   onSignOut: () => void;
 }) {
-  const [screen, setScreen] = useState<Screen>("clip");
+  const [screen, setScreen] = useState<Screen>("home");
   const [runId, setRunId] = useState<string | undefined>(undefined);
   const [device, setDevice] = useState(() => deviceName());
 
@@ -129,14 +134,20 @@ function Workspace({
     }
   };
 
+  // Keyed on the nav's ids, and `drop` is no longer one of them — it is a
+  // panel inside `brain` now. Both counts therefore roll up to `brain`, which
+  // is the only place a badge can still be seen: a badge on a screen the nav
+  // does not render is a badge nobody will ever read.
+  const unopenedLinks = hub?.links.filter((l) => !l.opened_at).length ?? 0;
+  const runEvents = state?.events.filter((e) => e.level !== "info").length ?? 0;
   const badges: Partial<Record<Screen, number>> = {
-    train: state?.events.filter((e) => e.level !== "info").length ?? 0,
-    drop: hub?.links.filter((l) => !l.opened_at).length ?? 0,
+    brain: runEvents + unopenedLinks,
   };
+  const brainBadges = { drop: unopenedLinks };
 
   // The hub is the half you interact with, so its connection drives the chip;
   // the training stream only matters while a run exists.
-  const connection = screen === "train" ? trainConn : hubConn;
+  const connection = screen === "brain" ? trainConn : hubConn;
 
   const runPicker = state ? (
     <RunPicker runs={state.runs} selected={state.run} onSelect={setRunId} />
@@ -164,11 +175,23 @@ function Workspace({
             dir >= 0 ? "page-in-fwd" : "page-in-back"
           }`}
         >
-          {screen === "clip" && <ClipScreen hub={hub} refresh={refreshHub} />}
-          {screen === "drop" && <DropScreen hub={hub} refresh={refreshHub} />}
-          {screen === "notes" && <NotesScreen hub={hub} refresh={refreshHub} />}
-          {screen === "train" &&
-            (state ? <Train state={state} actions={runPicker} /> : <Boot connection={trainConn} />)}
+          {screen === "home" && <HomeScreen onOpen={setScreen} />}
+          {screen === "capture" && <CaptureScreen />}
+          {screen === "courses" && <CoursesScreen />}
+          {screen === "projects" && <ProjectsScreen />}
+          {screen === "research" && <ResearchScreen />}
+          {screen === "learn" && <LearnScreen />}
+          {screen === "career" && <CareerScreen />}
+          {screen === "brain" && (
+            <BrainScreen
+              hub={hub}
+              refresh={refreshHub}
+              badges={brainBadges}
+              status={
+                state ? <Train state={state} actions={runPicker} /> : <Boot connection={trainConn} />
+              }
+            />
+          )}
         </div>
       </main>
 
