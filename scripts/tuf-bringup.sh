@@ -146,7 +146,12 @@ fi
 # ~2.8 G in use. Paging that into ~5.7 G free is an OOM-kill during the command
 # meant to prevent OOM-kills.
 SWAP_KB="$(sh_ "awk '/^SwapTotal/{print \$2}' /proc/meminfo")"
-SWAP_G=$((SWAP_KB / 1024 / 1024))
+# Rounded, not truncated. SwapTotal for a 4 GiB file reads 4194300 KB — four
+# kilobytes short of 4 GiB — so integer division floored it to "3 G" and this
+# report told you the box had less swap than it does. The advice was the same
+# either way, but a diagnostic that is visibly wrong about an easy number is
+# one you stop believing about the hard ones.
+SWAP_G=$(( (SWAP_KB + 524288) / 1048576 ))
 if [ "$SWAP_G" -ge 15 ]; then
   ok "swap is ${SWAP_G} G"
 elif sh_ 'test -f /swap2.img' 2>/dev/null; then
