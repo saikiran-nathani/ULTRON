@@ -140,6 +140,31 @@ else
   todo "~/.ssh/config has no User for 'tuf' — add:  User $REMOTE_USER"
 fi
 
+# ── 1b. an ssh forward that shadows the Mac's own hub ────────────────────
+# This one bites the moment you first `ssh tuf`, and it presents as the hub
+# being down.
+#
+# `~/.ssh/config` was written for the world AFTER the migration, and carries
+# `LocalForward 8730 127.0.0.1:8730`. Before the migration the hub is still on
+# the Mac listening on `*:8730`, and a forward binding `127.0.0.1:8730`
+# specifically wins over that wildcard for every loopback connection. So the
+# first ssh silently routes the Mac's own hub traffic down a tunnel to a box
+# where nothing is listening: `curl` gets "connection reset by peer", the
+# dashboard stops loading, and probe.py starts reporting the hub as down while
+# it is running perfectly.
+#
+# `ControlPersist` makes it outlive the shell that caused it, so the symptom
+# shows up minutes after an ssh you have already forgotten about.
+if ssh -G "$HOST" 2>/dev/null | grep -qE '^localforward 8730 '; then
+  if lsof -nP -iTCP:8730 -sTCP:LISTEN 2>/dev/null | grep -q '^ssh'; then
+    fail "an ssh forward is holding 127.0.0.1:8730 and shadowing the Mac's hub — run 'ssh -O exit $HOST', then comment out 'LocalForward 8730' in ~/.ssh/config until the hub actually moves"
+  else
+    todo "~/.ssh/config still forwards 8730 to the TUF; the next 'ssh $HOST' will shadow the Mac's hub. Comment it out until migration step 5."
+  fi
+else
+  ok "no ssh forward is shadowing port 8730"
+fi
+
 # ── 2. swap: 16 G total, by ADDING a file ────────────────────────────────
 # Never swapoff to resize. swapoff has to page everything currently swapped
 # back into RAM before it returns, and the capacity sweeps have driven swap to
