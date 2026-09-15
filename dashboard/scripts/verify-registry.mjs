@@ -87,6 +87,43 @@ function identified(node: any, path = "", out = new Map<string, number>()) {
   return out;
 }
 
+/**
+ * Arrays that are EMPTY in a fresh blob.
+ *
+ * The check above cannot see these: an empty array has no id-bearing elements,
+ * so a record collection missing from the registry would pass unnoticed simply
+ * because a new install has no courses yet. Most of the model is empty in a
+ * fresh blob, which makes this the larger half of the coverage question.
+ *
+ * An empty array is either a record collection (must be registered) or a
+ * genuine scalar list of strings (must not be). Nothing in the data
+ * distinguishes them, so the scalar ones are named here. A new one shows up as
+ * a failure that has to be classified by hand, which is the right amount of
+ * friction: the alternative is a silent gap.
+ */
+const SCALAR_ARRAYS = new Set([
+  "roadmap.principles",
+  "roadmap.layers[].methods",
+  "roadmap.layers[].demo.flow",
+  "academics.semesters",
+  "projects[].runbook.commands",
+  "projects[].runbook.env",
+  "projects[].runbook.ports",
+  "projects[].runbook.links",
+]);
+
+function emptyArrays(node: any, path = "", out = new Set<string>()) {
+  if (Array.isArray(node)) {
+    if (node.length === 0) out.add(path);
+    for (const item of node) emptyArrays(item, path + "[]", out);
+    return out;
+  }
+  if (node && typeof node === "object") {
+    for (const [k, v] of Object.entries(node)) emptyArrays(v, path ? path + "." + k : k, out);
+  }
+  return out;
+}
+
 // ── 1. coverage ──────────────────────────────────────────────────────────
 const registered = new Set(NEXUS_REGISTRY.filter((s) => s.kind !== "singleton").map((s) => s.path));
 const found = identified(blob);
@@ -95,6 +132,19 @@ for (const [p, n] of [...found].sort()) {
   const ok = registered.has(p);
   console.log(\`  \${ok ? "covered " : "UNCOVERED"} \${p}  (\${n})\`);
   if (!ok) problems.push(\`\${p} is not in NEXUS_REGISTRY — its data falls into \${REST}\`);
+}
+
+// ── 1b. the empty half of the model ──────────────────────────────────────
+const unclassified = [...emptyArrays(blob)].filter(
+  (p) => !registered.has(p) && !SCALAR_ARRAYS.has(p),
+);
+console.log("\\nempty arrays in a fresh blob:", [...emptyArrays(blob)].length, "-", unclassified.length, "unclassified");
+for (const p of unclassified) {
+  console.log(\`  UNCLASSIFIED \${p}\`);
+  problems.push(
+    \`\${p} is an empty array that is neither registered nor a known scalar list — \` +
+      \`if it holds records it needs a registry entry, and a fresh blob cannot tell us which\`,
+  );
 }
 
 // ── 2. nothing stranded in the leftover ──────────────────────────────────
