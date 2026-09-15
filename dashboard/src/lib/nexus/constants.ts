@@ -67,8 +67,8 @@ export interface Mood {
 }
 export const MOODS: Mood[] = [
   { val: 1, emoji: "😔", label: "Rough", color: "var(--color-bad)" },
-  { val: 2, emoji: "😐", label: "Meh", color: "var(--color-amber)" },
-  { val: 3, emoji: "🙂", label: "Okay", color: "var(--color-copper-lt)" },
+  { val: 2, emoji: "😐", label: "Meh", color: "var(--color-warn)" },
+  { val: 3, emoji: "🙂", label: "Okay", color: "var(--color-accent-lt)" },
   { val: 4, emoji: "😊", label: "Good", color: "var(--color-info)" },
   { val: 5, emoji: "🚀", label: "Great", color: "var(--color-good)" },
 ];
@@ -122,9 +122,15 @@ export interface FragmentTypeMeta {
   color: string; // a design token (never a raw hex in components)
 }
 
+// The colours below were `--color-copper*` and `--color-amber`, which were
+// nexus's tokens and do not exist in this app's theme. A missing custom
+// property is not an error: `color-mix(in srgb, var(--nope) 10%, transparent)`
+// resolves to nothing and the chip renders invisible. Mapped to the tokens
+// that do exist. `theme.test.ts` now fails on any reference that has no
+// definition, which is the only way this class of break is visible at all.
 export const FRAGMENT_TYPES: FragmentTypeMeta[] = [
   { id: "seed", label: "Seed", hint: "raw idea", color: "var(--color-good)" },
-  { id: "thread", label: "Thread", hint: "open question I'm living with", color: "var(--color-copper)" },
-  { id: "principle", label: "Principle", hint: "a keeper", color: "var(--color-amber)" },
+  { id: "thread", label: "Thread", hint: "open question I'm living with", color: "var(--color-accent)" },
+  { id: "principle", label: "Principle", hint: "a keeper", color: "var(--color-warn)" },
   { id: "action", label: "Action", hint: "do this", color: "var(--color-bad)" },
 ];

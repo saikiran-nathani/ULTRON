@@ -23,6 +23,27 @@ interface TimerState {
   logNow: () => void; // log elapsed focus time as a session immediately
 }
 
+/** Minutes a `logNow` should record, or null when it must record nothing.
+ *
+ * The bug this replaced measured `focusLength - secondsLeft` regardless of
+ * mode, so four minutes into a five-minute break it computed 25 − 4 = 21
+ * minutes of study and wrote them to the log as fact. Invented minutes are
+ * indistinguishable from real ones once they are in the record, permanently.
+ *
+ * Null rather than 0 outside focus: "I studied for 0 minutes" is a record,
+ * "you were on a break" is the truth, and the caller should write neither.
+ *
+ * Exported so its test binds to this function instead of restating it.
+ */
+export function minutesLogged(
+  mode: string,
+  secondsLeft: number,
+  modeSeconds: number,
+): number | null {
+  if (mode !== "focus") return null;
+  return Math.max(1, Math.round((modeSeconds - secondsLeft) / 60));
+}
+
 const settings = () =>
   useData.getState().data?.academics.studyPlanner.pomodoroSettings ?? {
     focus: 25,
@@ -112,7 +133,18 @@ export const useTimer = create<TimerState>((set, get) => {
     setField: (patch) => set(patch),
     logNow: () => {
       const s = get();
-      const elapsed = Math.max(1, Math.round((durationFor("focus") - s.secondsLeft) / 60));
+      // Against the CURRENT mode's duration, not always focus's.
+      //
+      // `durationFor("focus") - secondsLeft` during a 5-minute break computes
+      // 25 − 4 = 21 minutes of study that nobody did, and writes it to the
+      // session log as fact. A study log you cannot trust is worse than no
+      // study log: it is the same number of minutes, permanently, and there is
+      // nothing in the record marking which ones were invented.
+      //
+      // Refused rather than logged as zero, for the same reason. "I studied
+      // for 0 minutes" is a record; "you were on a break" is the truth.
+      const elapsed = minutesLogged(s.mode, s.secondsLeft, durationFor(s.mode));
+      if (elapsed === null) return;
       const tags = s.tags.split(/\s+/).filter((t) => t.startsWith("#"));
       study.addSession({
         duration: elapsed,

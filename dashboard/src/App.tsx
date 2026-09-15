@@ -19,6 +19,7 @@ import { motion } from "framer-motion";
 import { WifiOff } from "lucide-react";
 import { AccountPill, BottomBar, SCREENS, Sidebar, type Screen } from "@/components/Nav";
 import { RunPicker } from "@/components/RunPicker";
+import { startNexusSync, type NexusSync } from "@/lib/nexus/bridge";
 import { BrainScreen } from "@/screens/Brain";
 import { CaptureScreen } from "@/screens/Capture";
 import { CareerScreen } from "@/screens/Career";
@@ -111,6 +112,34 @@ function Workspace({
   const { state, connection: trainConn } = useLiveState(runId);
   const system = useSystem();
 
+  // Boot the local-first store and wire sync to it — here, inside Workspace,
+  // because Workspace only mounts once past the auth gate. Started any earlier
+  // and every cycle would 401 against an enrolled hub, on a timer, forever.
+  //
+  // `startNexusSync` and not `load()` plus `createNexusSync`: the two steps
+  // share `cacheHit`, and a caller that splits them has to carry that boolean
+  // between them. The value someone defaults when they forget is the
+  // tombstone catastrophe — an evicted device concluding the whole dataset was
+  // deleted and pushing a tombstone for every record. See the bridge.
+  //
+  // Nothing called this until now, which meant `useData.data` stayed null and
+  // every ported slice threw on `s.data!.x`. The screens were built; the app
+  // never turned them on.
+  useEffect(() => {
+    let sync: NexusSync | undefined;
+    let cancelled = false;
+    void startNexusSync({ label: { name: deviceName(), platform: navigator.userAgent } }).then(
+      (s) => {
+        if (cancelled) s.stop();
+        else sync = s;
+      },
+    );
+    return () => {
+      cancelled = true;
+      sync?.stop();
+    };
+  }, []);
+
   // Direction for the page transition: which way did we travel through the nav?
   const index = SCREENS.findIndex((s) => s.id === screen);
   const prev = useRef(index);
@@ -175,7 +204,13 @@ function Workspace({
             dir >= 0 ? "page-in-fwd" : "page-in-back"
           }`}
         >
-          {screen === "home" && <HomeScreen onOpen={setScreen} />}
+          {/* `state` and `connection` are passed down rather than let Home call
+              `useLiveState` itself: that would be a second EventSource for one
+              page, and a browser allows six per origin — `api.ts` records that
+              exhausting them stops the whole dashboard loading. */}
+          {screen === "home" && (
+            <HomeScreen onOpen={setScreen} state={state} connection={trainConn} />
+          )}
           {screen === "capture" && <CaptureScreen />}
           {screen === "courses" && <CoursesScreen />}
           {screen === "projects" && <ProjectsScreen />}
