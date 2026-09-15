@@ -195,10 +195,22 @@ def _launchd(unit: Unit, *, repo: Path, env: dict[str, str]) -> str:
 
 
 def _systemd(unit: Unit, *, repo: Path, env: dict[str, str]) -> str:
-    # systemd splits ExecStart on whitespace, so the interpreter path must be
-    # quoted. A plist does not need this (it is XML with one arg per element),
-    # and the Mac checkout lives under "MacBook Pro" -- a space that would
-    # break the Linux unit while the macOS one looked fine.
+    # ExecStart and WorkingDirectory quote DIFFERENTLY, and getting it uniform
+    # is what broke the first real deployment.
+    #
+    # `ExecStart` is split on whitespace with quote removal, so an interpreter
+    # path containing a space must be quoted — and the Mac checkout lives under
+    # "MacBook Pro". `WorkingDirectory` takes a single value verbatim to
+    # end-of-line and does NOT strip quotes, so quoting it makes the path start
+    # with `"` and systemd refuses the unit outright:
+    #
+    #     WorkingDirectory= path is not absolute: "/home/.../ULTRON"
+    #     Unit configuration has fatal error, unit will not be started
+    #
+    # A space-containing path therefore needs no quoting there, and must not
+    # have any. This was invisible until the unit was loaded on a real box:
+    # the Mac runs under launchd, whose plist is XML with one argument per
+    # element, so nothing here had ever been parsed by systemd.
     argv = " ".join([f'"{_python()}"', "-m", "src.trainwatch.cli", *unit.args])
     environment = "".join(f'\nEnvironment="{k}={v}"' for k, v in sorted(env.items()))
     # `WantedBy=default.target` is a *user* unit, which needs
@@ -229,7 +241,7 @@ StartLimitIntervalSec=300
 
 [Service]
 Type=simple
-WorkingDirectory="{repo}"
+WorkingDirectory={repo}
 ExecStart={argv}
 Restart=on-failure
 RestartSec=5

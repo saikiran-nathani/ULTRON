@@ -33,11 +33,18 @@ def test_launchd_survives_a_space_in_the_path() -> None:
 
 
 def test_systemd_quotes_paths(tmp_path: Path) -> None:
-    """systemd splits ExecStart on whitespace; a plist does not."""
+    """systemd splits ExecStart on whitespace; a plist does not.
+
+    This test used to assert `WorkingDirectory="/home/x/my repo"` — quoted, to
+    match ExecStart. It was wrong, and because it was wrong it *defended* the
+    bug: systemd does not strip quotes there, so the path began with `"`, and
+    the unit was refused as non-absolute the first time a real systemd read it.
+    A test can only protect the behaviour it describes.
+    """
     text = service.render("ship", repo=Path("/home/x/my repo"), system="Linux")
     exec_line = next(ln for ln in text.splitlines() if ln.startswith("ExecStart="))
     assert exec_line.count('"') >= 2, f"interpreter not quoted: {exec_line}"
-    assert 'WorkingDirectory="/home/x/my repo"' in text
+    assert "WorkingDirectory=/home/x/my repo" in text
 
 
 def test_env_is_carried_into_the_unit(tmp_path: Path) -> None:
@@ -202,3 +209,43 @@ def test_the_restart_limit_is_not_left_to_systemds_default(name: str = "hub") ->
     text = service._systemd(service.UNITS[name], repo=Path("/repo"), env={})
     assert "StartLimitIntervalSec=300" in text
     assert "StartLimitBurst=5" in text
+
+
+@pytest.mark.parametrize("name", sorted(service.UNITS))
+def test_a_space_in_the_repo_path_is_quoted_where_systemd_splits_and_not_where_it_does_not(
+    name: str,
+) -> None:
+    """The bug that stopped the first real deployment, one line before the end.
+
+    `ExecStart` is split on whitespace with quote removal, so an interpreter
+    path containing a space must be quoted. `WorkingDirectory` takes one value
+    verbatim to end-of-line and does NOT strip quotes — so quoting it makes the
+    path begin with `"`, and systemd refuses the whole unit:
+
+        WorkingDirectory= path is not absolute: "/home/.../ULTRON"
+        Unit configuration has fatal error, unit will not be started
+
+    Quoting both looked consistent and was wrong. It was invisible for as long
+    as it existed, because the Mac runs this under launchd — a plist is XML
+    with one argument per element, so nothing here had ever been parsed by
+    systemd until the unit was loaded on the box.
+
+    The repo path in this test contains a space on purpose: the real one does
+    ("MacBook Pro"), and a fixture without one cannot fail.
+    """
+    text = service._systemd(service.UNITS[name], repo=Path("/Users/x/MacBook Pro/ULTRON"), env={})
+    values = {
+        line.split("=", 1)[0]: line.split("=", 1)[1]
+        for line in text.splitlines()
+        if "=" in line and not line.startswith(("#", "["))
+    }
+
+    wd = values["WorkingDirectory"]
+    assert not wd.startswith('"'), f"systemd will reject this as non-absolute: {wd!r}"
+    assert wd.startswith("/"), f"WorkingDirectory must be absolute, got {wd!r}"
+    assert " " in wd, "the fixture lost its space, so this test can no longer fail"
+
+    # The mirror image: the interpreter IS quoted, or systemd splits the path
+    # at the space and runs "/Users/x/MacBook" with "Pro/ULTRON/..." as an
+    # argument.
+    assert values["ExecStart"].startswith('"'), values["ExecStart"]
