@@ -1,0 +1,66 @@
+<!doctype html>
+<!-- Dev-only. Vite serves root HTML files in dev and builds only index.html, so
+     this never ships. It exists because a theme asserted is not a theme seen:
+     the palette, the three voices, the machined edge and the grain either read
+     as intentional together or they do not, and only a browser can say. -->
+<html lang="en" class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <title>AZIMUTH — theme</title>
+    <link rel="stylesheet" href="/src/theme.css" />
+  </head>
+  <body style="overflow: auto">
+    <div class="grain pointer-events-none fixed inset-0 z-50 opacity-[0.035] mix-blend-soft-light"></div>
+    <main class="mx-auto flex max-w-3xl flex-col gap-7 p-10">
+      <header class="flex flex-col gap-1">
+        <span class="label">Theme · observatory logbook</span>
+        <h1 class="display text-5xl">AZIMUTH</h1>
+        <p class="max-w-lg text-[13px]" style="color: var(--color-fg-dim)">
+          Readings in tabular mono, writing in a high-contrast serif. One violet accent,
+          held clear of every semantic hue so an alert can never be mistaken for branding.
+        </p>
+      </header>
+
+      <section class="grid grid-cols-3 gap-4">
+        <div class="rounded-[var(--radius-lg)] p-5" style="background: var(--color-card); box-shadow: var(--shadow-card); border: 0.5px solid var(--color-line)">
+          <span class="label">Loss</span>
+          <div class="nums mt-1 text-3xl" style="color: var(--color-fg)">1.604</div>
+          <div class="nums mt-1 text-[11px]" style="color: var(--color-good)">▼ 0.031</div>
+        </div>
+        <div class="rounded-[var(--radius-lg)] p-5" style="background: var(--color-card); box-shadow: var(--shadow-glow); border: 0.5px solid var(--color-line-active)">
+          <span class="label">Step</span>
+          <div class="nums mt-1 text-3xl" style="color: var(--color-accent)">12 480</div>
+          <div class="nums mt-1 text-[11px]" style="color: var(--color-fg-muted)">6.9 µs/step</div>
+        </div>
+        <div class="rounded-[var(--radius-lg)] p-5" style="background: var(--color-card); box-shadow: var(--shadow-card); border: 0.5px solid var(--color-line)">
+          <span class="label">Gates</span>
+          <div class="nums mt-1 text-3xl" style="color: var(--color-fg)">7<span style="color: var(--color-fg-muted)">/18</span></div>
+          <div class="nums mt-1 text-[11px]" style="color: var(--color-warn)">3 unmeasured</div>
+        </div>
+      </section>
+
+      <section class="rounded-[var(--radius-lg)] p-6" style="background: var(--color-panel); box-shadow: var(--shadow-card); border: 0.5px solid var(--color-hairline)">
+        <span class="label">Journal · 15 September</span>
+        <h2 class="display mt-2 text-2xl">The monitor was blind for nine hours</h2>
+        <p class="mt-2 text-[13px] leading-relaxed" style="color: var(--color-fg-dim)">
+          137 samples were expected at five-minute spacing. Thirty-eight arrived. The gap in the
+          log read as an unbroken line of <em>ok</em>, which is the failure this whole project
+          exists to remove — absence of evidence rendering as success.
+        </p>
+        <div class="mt-4 flex gap-2">
+          <span class="rounded-full px-3 py-1 text-[10px] font-semibold" style="background: var(--color-subtle); color: var(--color-accent-lt)">accent</span>
+          <span class="rounded-full px-3 py-1 text-[10px] font-semibold" style="background: var(--color-subtle); color: var(--color-good)">good</span>
+          <span class="rounded-full px-3 py-1 text-[10px] font-semibold" style="background: var(--color-subtle); color: var(--color-warn)">warn</span>
+          <span class="rounded-full px-3 py-1 text-[10px] font-semibold" style="background: var(--color-subtle); color: var(--color-bad)">bad</span>
+          <span class="rounded-full px-3 py-1 text-[10px] font-semibold" style="background: var(--color-subtle); color: var(--color-info)">info</span>
+        </div>
+      </section>
+
+      <section class="flex items-center gap-3">
+        <button class="rounded-[var(--radius-sm)] px-4 py-2 text-[12px] font-semibold" style="background: var(--color-accent); color: var(--color-bg); box-shadow: var(--shadow-glow)">Capture</button>
+        <button class="rounded-[var(--radius-sm)] px-4 py-2 text-[12px] font-semibold" style="background: var(--color-card); color: var(--color-fg-dim); border: 0.5px solid var(--color-line)">Secondary</button>
+        <span class="nums text-[11px]" style="color: var(--color-fg-muted)">1234567890 · tabular</span>
+      </section>
+    </main>
+  </body>
+</html>

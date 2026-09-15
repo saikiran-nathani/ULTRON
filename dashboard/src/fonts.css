@@ -1,15 +1,27 @@
-/* Self-hosted latin subsets — vendored by scripts/vendor-fonts.py.
-   Self-hosted on purpose: the dashboard must render correctly on a box
-   with no internet and an iPad on a captive network, and it keeps the
-   tailnet the only thing the client talks to. */
+/* Self-hosted latin subsets.
+   Self-hosted on purpose: the app must render correctly on a box with no
+   internet and an iPad on a captive network, and it keeps the tailnet the only
+   thing the client talks to.
+
+   Three voices, three faces, no more. Fraunces is a variable file covering the
+   whole display range in 66 KB — shipping one static file per weight would have
+   been the same bytes several times over. `fraunces-latin-var.woff2` and its
+   OFL licence came from the nexus checkout rather than the network, which is
+   also why there is an OFL.txt in this directory: the licence travels with the
+   font when the font travels with the app. */
 
 @font-face {
-  font-family: 'Bricolage Grotesque';
+  /* Display voice. A variable `opsz` axis, which is what `.display`'s
+     font-optical-sizing: auto drives — so no font-variation-settings here,
+     because that would take precedence and pin opsz flat.
+     The 400..600 range is narrower than the face's real 100..900 wght axis on
+     purpose: it caps what the design can reach, and the display voice must
+     never go above 600. */
+  font-family: 'Fraunces';
   font-style: normal;
   font-weight: 400 600;
-  font-stretch: 100%;
   font-display: swap;
-  src: url('/fonts/bricolage-400-600.woff2') format('woff2');
+  src: url('/fonts/fraunces-latin-var.woff2') format('woff2');
   unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
 }
 

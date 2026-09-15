@@ -1,51 +1,64 @@
 /* ============================================================
-   SONAR DEEP — a 3am deep-sea watch station.
-   Abyssal blue-black canvas, one phosphor aquamarine ping, instrument numerals.
+   AZIMUTH — a midnight observatory logbook.
 
-   The accent is deliberately held clear of all four semantic hues: this is an
-   alerting surface, so red/amber must never be confusable with "the brand
-   colour". Aquamarine is the interaction hue; leaf-green, coral, amber and
-   periwinkle carry meaning.
+   Cool near-black canvas with a faint iris dawn at one corner, a serif display
+   voice for prose, and instrument numerals in mono. The app is two things at
+   once — live training telemetry and a study/work journal — so the type does
+   the reconciling: readings in tabular mono, writing in a high-contrast serif.
+
+   Replaces SONAR DEEP (aquamarine), whose one rule is kept verbatim because it
+   was the hard-won part:
+
+     The accent is held clear of all four semantic hues. This is an alerting
+     surface, so red and amber must never be confusable with "the brand
+     colour".
+
+   That rule is what rejected the obvious indigo. `--color-info` here is a sky
+   blue, and an indigo accent sits close enough to it that a small chip could
+   not be read at a glance. Iris — violet, off the blue axis — is clear of
+   green, coral, amber AND blue, which is the only quadrant left once the
+   semantics have taken theirs. It is also deliberately desaturated: an
+   alerting UI cannot afford a brand colour that shouts louder than `--bad`.
    ============================================================ */
 @import "tailwindcss";
 @import "./fonts.css";
 
 @theme {
   /* ── Backgrounds: abyss → raised, all within ~10° hue, separated by luminance ── */
-  --color-bg: #04070a;
-  --color-panel: #080d12;
-  --color-card: #0e151c;
-  --color-card-hover: #15202a;
-  --color-subtle: #17232d;
+  --color-bg: #06060c;
+  --color-panel: #0b0a14;
+  --color-card: #12111d;
+  --color-card-hover: #1a1827;
+  --color-subtle: #201d30;
 
-  /* ── Accent: phosphor aquamarine, three weights ── */
-  --color-accent: #31d0c6;
-  --color-accent-lt: #6fede2;
-  --color-accent-dim: #1a756f;
+  /* ── Accent: iris, three weights ── */
+  --color-accent: #9b7ae0;
+  --color-accent-lt: #c3a9f5;
+  --color-accent-dim: #5c4490;
 
-  /* ── Neutral structural ramp: warm gray against the cool canvas ── */
-  --color-neutral-900: #0b0d0f;
-  --color-neutral-700: #1a1c1d;
-  --color-neutral-500: #303331;
-  --color-neutral-300: #585b58;
-  --color-neutral-100: #9b9e99;
+  /* ── Neutral structural ramp: violet-gray, one family with the canvas ── */
+  --color-neutral-900: #0c0b12;
+  --color-neutral-700: #1b1a22;
+  --color-neutral-500: #333040;
+  --color-neutral-300: #5c5870;
+  --color-neutral-100: #9a95a8;
 
   /* ── Text ramp ── */
-  --color-fg: #e4f0ee;
-  --color-fg-dim: #8ea3a3;
-  --color-fg-muted: #56696b;
+  --color-fg: #ecebf6;
+  --color-fg-dim: #a09cb4;
+  --color-fg-muted: #63607a;
 
   /* ── Semantics: muted, each clearly distinct from the accent's hue ── */
-  --color-good: #79c46b; /* leaf — not teal, so "healthy" ≠ "brand" */
-  --color-bad: #f2635c; /* coral */
-  --color-warn: #e9a83c; /* amber */
-  --color-info: #7b8ff5; /* periwinkle */
+  --color-good: #6fce9f; /* mint — not violet, so "healthy" ≠ "brand" */
+  --color-bad: #e8737c; /* coral */
+  --color-warn: #e0ae52; /* amber */
+  --color-info: #6fb0e8; /* sky — pushed off periwinkle, which the iris accent now occupies */
 
   /* ── Lines: accent-alpha hairlines, never solid gray ── */
-  --color-line: rgba(49, 208, 198, 0.16);
-  --color-line-active: rgba(49, 208, 198, 0.38);
-  --color-line-strong: rgba(111, 237, 226, 0.6);
-  --color-hairline: rgba(155, 158, 153, 0.1);
+  --color-line: rgba(155, 122, 224, 0.16);
+  --color-line-active: rgba(155, 122, 224, 0.38);
+  --color-line-strong: rgba(195, 169, 245, 0.6);
+  --color-hairline: rgba(154, 149, 168, 0.1);
 
   /* ── Radii ── */
   --radius-xs: 5px;
@@ -55,18 +68,21 @@
   --radius-xl: 24px;
 
   /* ── Elevation: the inner top hairline is the machined edge ── */
-  --shadow-card: inset 0 1px 0 rgba(228, 240, 238, 0.04), 0 1px 1px rgba(0, 0, 0, 0.5),
+  --shadow-card: inset 0 1px 0 rgba(236, 235, 246, 0.04), 0 1px 1px rgba(0, 0, 0, 0.5),
     0 14px 30px -20px rgba(0, 0, 0, 0.85);
-  --shadow-pop: inset 0 1px 0 rgba(228, 240, 238, 0.05), 0 24px 70px -24px rgba(0, 0, 0, 0.9);
-  --shadow-glow: 0 0 0 1px rgba(49, 208, 198, 0.25), 0 14px 40px -16px rgba(49, 208, 198, 0.35);
+  --shadow-pop: inset 0 1px 0 rgba(236, 235, 246, 0.05), 0 24px 70px -24px rgba(0, 0, 0, 0.9);
+  --shadow-glow: 0 0 0 1px rgba(155, 122, 224, 0.25), 0 14px 40px -16px rgba(155, 122, 224, 0.35);
 
   /* ── Three voices ── */
-  --font-display: "Bricolage Grotesque", "Avenir Next", Georgia, serif;
+  --font-display: "Fraunces", "Iowan Old Style", Georgia, serif;
   --font-body: "Manrope", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
   --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
 
   /* ── Layout & motion ── */
   --spacing-sidebar: 212px;
+  /* Kept even though a PWA has no draggable titlebar: the token contract owns
+     the slot, and a theme that deletes slots stops being swappable. */
+  --spacing-titlebar: 28px;
   --ease-signature: cubic-bezier(0.16, 1, 0.3, 1);
 }
 
@@ -99,14 +115,24 @@
        counter-glow bottom-right, over the abyss. */
     background:
       radial-gradient(
-        78% 52% at 8% -10%,
-        color-mix(in srgb, var(--color-accent) 11%, transparent),
+        80% 54% at 6% -12%,
+        color-mix(in srgb, var(--color-accent) 14%, transparent),
+        transparent 64%
+      ),
+      /* Pulled on-screen from 110%/114%, where it was almost entirely outside
+         the viewport and the canvas went flat below the first third. A flat
+         field is the single clearest tell of a templated UI. */
+      radial-gradient(
+        66% 52% at 98% 106%,
+        color-mix(in srgb, var(--color-info) 10%, transparent),
         transparent 62%
       ),
+      /* A third, barely-there warm lift through the middle, so the band
+         between the two glows is not the only truly flat region. */
       radial-gradient(
-        62% 48% at 110% 114%,
-        color-mix(in srgb, var(--color-info) 7%, transparent),
-        transparent 60%
+        90% 60% at 50% 55%,
+        color-mix(in srgb, var(--color-accent) 4%, transparent),
+        transparent 70%
       ),
       var(--color-bg);
     background-attachment: fixed;
