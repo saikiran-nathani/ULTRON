@@ -12,8 +12,16 @@
 #   sudo apt update && sudo apt install -y \
 #       openssh-server avahi-daemon tmux build-essential htop nvtop rsync restic \
 #     && sudo systemctl enable --now ssh \
-#     && sudo tailscale set --hostname=tuf --ssh \
+#     && sudo tailscale set --ssh \
 #     && echo "USER=$(whoami)"
+#
+# No `--hostname`. The box keeps the tailnet name `killerx8143`, which is a
+# decision and not an oversight: `tuf` is a local SSH alias in ~/.ssh/config
+# and nothing on the server side cares what the machine is called.
+# `resolve_allowed_hosts()` builds the ADR-0003 C1 Host allowlist from
+# `tailscale status --json` at startup, so the hub accepts whatever name the
+# box actually has. A hand-maintained allowlist would have made the name
+# load-bearing; an auto-detected one does not.
 #
 # `build-essential` is in there for two reasons, not one: it is also the unsloth
 # unblock, because Triton JIT-compiles kernels at runtime and needs a C
@@ -33,6 +41,9 @@
 
 set -euo pipefail
 
+# The local ~/.ssh/config alias, NOT the tailnet name. The box is called
+# `killerx8143` on the tailnet; `tuf` is what this Mac calls it. Override with
+# TUF_HOST if the alias is ever renamed.
 HOST="${TUF_HOST:-tuf}"
 APPLY=0
 FAILED=0
@@ -94,13 +105,19 @@ if ! sh_ true 2>/dev/null; then
 
   Nothing else can run until this works. In order, the likely causes:
 
-    1. The TUF is off, or off the tailnet.     tailscale status | grep -i tuf
+    1. The box is off, or off the tailnet.     tailscale status | grep killerx
     2. Step 1 was never run, so there is no
        SSH server and port 22 is closed.       (see the header of this script)
-    3. It is still named killerx8143.          sudo tailscale set --hostname=tuf
+       "Connection refused" rather than a
+       timeout means exactly this: reachable,
+       and nothing listening on 22.
+    3. ~/.ssh/config points 'tuf' at a name
+       MagicDNS cannot resolve.                grep -A3 'Host tuf' ~/.ssh/config
+       It must say HostName killerx8143 —
+       the box keeps that tailnet name.
     4. ~/.ssh/config has no User for it.       grep -A3 'Host tuf' ~/.ssh/config
 
-  Item 4 is the one that looks like a network problem and is not.
+  Items 3 and 4 are the ones that look like a network problem and are not.
 EOF
   exit 1
 fi

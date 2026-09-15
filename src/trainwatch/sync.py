@@ -611,14 +611,26 @@ class Sync:
     ) -> list[dict[str, Any]]:
         """Every version of one record, newest first, winners and losers.
 
-        What makes "finance was replaced by MacBook-Pro at 14:02 — view /
-        restore" answerable, and what makes it safe to live on slice-level
-        granularity while 3b is still being built.
+        What makes *"replaced by MacBook-Pro at 14:02 — view / restore"*
+        answerable. The device NAME is part of that and was missing: rows
+        carried `device_id`, so the archive could only have said "replaced by
+        mzr7x8abc12", which tells nobody which of their machines overwrote
+        their edit. The sentence in this docstring was unanswerable by the
+        function it documented.
         """
+        # LEFT JOIN, and the direction matters. `sync_log` is append-only and
+        # outlives everything else: an inner join would silently drop every
+        # version written by a device whose row is gone, so the archive would
+        # answer "no history" for a record that has plenty. Losing the name is
+        # a cosmetic loss; losing the version is the failure this table exists
+        # to prevent.
         rows = self._db.execute(
-            """SELECT * FROM sync_log
-                WHERE owner_id = ? AND collection = ? AND record_id = ?
-                ORDER BY id DESC LIMIT ?""",
+            """SELECT l.*, d.name AS device_name
+                 FROM sync_log l
+                 LEFT JOIN sync_devices d
+                   ON d.owner_id = l.owner_id AND d.id = l.device_id
+                WHERE l.owner_id = ? AND l.collection = ? AND l.record_id = ?
+                ORDER BY l.id DESC LIMIT ?""",
             (owner_id, collection, record_id, max(1, int(limit))),
         )
         return [
@@ -627,6 +639,10 @@ class Sync:
                 "deleted": bool(r["deleted"]),
                 "body": json.loads(r["body"]) if r["body"] else None,
                 "device_id": r["device_id"],
+                # Falls back to the id, never to empty. "replaced by  at 14:02"
+                # is worse than an ugly id: it reads as though the app does not
+                # know what happened, when in fact nobody named the device.
+                "device_name": r["device_name"] or r["device_id"],
                 "outcome": r["outcome"],
                 "ts": r["ts"],
             }

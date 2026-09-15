@@ -7,7 +7,10 @@ a personal app and a data breach.
 
 from __future__ import annotations
 
+import asyncio
+import json
 from collections.abc import Iterator
+from dataclasses import replace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -20,6 +23,7 @@ from urllib.parse import quote, unquote
 from src.trainwatch.hlc import format_hlc
 from src.trainwatch.server.app import create_app
 from src.trainwatch.server.auth_api import CSRF_COOKIE, CSRF_HEADER
+from src.trainwatch.sync import Sync
 
 PW = "correct-horse-battery"
 GUARD = {"X-Trainwatch": "1"}
@@ -51,6 +55,10 @@ def _login(c: TestClient, user: str = "sai") -> dict[str, str]:
     resp = c.post("/api/auth/login", json={"username": user, "password": PW}, headers=GUARD)
     assert resp.status_code == 200, resp.text
     return {CSRF_HEADER: c.cookies[CSRF_COOKIE], **GUARD}
+
+
+def _cookie_header(c: TestClient) -> str:
+    return "; ".join(f"{k}={v}" for k, v in c.cookies.items())
 
 
 def change(rid: str, counter: int = 0, node: str = "dev-a", body=None) -> dict:
@@ -409,3 +417,388 @@ def test_state_and_history_need_an_identity_too(client: TestClient) -> None:
         client.get("/api/sync/history", params={"collection": "journal", "id": "x"}).status_code
         == 401
     )
+
+
+# ══ the live stream ══════════════════════════════════════════════════════
+
+
+async def _open_stream(
+    app: object, cookie_header: str, *, ticks: int = 1, path: str = "/api/sync/events"
+) -> dict[str, object]:
+    """Open the SSE stream against the real ASGI stack and report the outcome.
+
+    Driving the app directly rather than using `TestClient.stream`, because the
+    endpoint is an infinite generator by design and TestClient waits for the
+    ASGI call to finish when the response context exits. It hangs forever —
+    through `pytest-timeout`, which cannot interrupt it — and the first attempt
+    at the equivalent hub test wedged the whole suite. See the same harness in
+    `test_auth_client_contract.py`.
+
+    `receive()` answers `http.disconnect` only after `ticks` body chunks have
+    been emitted, so the generator runs a real loop iteration or two and the
+    frames it produces can be inspected, then returns cleanly.
+
+    The request carries a cookie and an Accept header and nothing else, because
+    that is exactly what `new EventSource(...)` sends: no `X-Trainwatch`, no
+    `X-CSRF-Token`, no `Authorization`. The API has no parameter for any of them.
+    """
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0", "spec_version": "2.1"},
+        "http_version": "1.1",
+        "method": "GET",
+        "scheme": "http",
+        "path": path,
+        "raw_path": path.encode(),
+        "query_string": b"",
+        "root_path": "",
+        "headers": [(b"host", b"testserver"), (b"accept", b"text/event-stream")]
+        + ([(b"cookie", cookie_header.encode())] if cookie_header else []),
+        "client": ("127.0.0.1", 1234),
+        "server": ("testserver", 80),
+        "state": {},
+    }
+    result: dict[str, object] = {}
+    chunks: list[bytes] = []
+    done = asyncio.Event()
+
+    async def receive() -> dict[str, str]:
+        # Let the generator emit `ticks` frames, then behave like a client that
+        # closed the tab.
+        await done.wait()
+        return {"type": "http.disconnect"}
+
+    async def send(message: dict[str, object]) -> None:
+        if message["type"] == "http.response.start":
+            result["status"] = message["status"]
+            result["headers"] = {
+                k.decode(): v.decode()
+                for k, v in message.get("headers", [])  # type: ignore[union-attr]
+            }
+        elif message["type"] == "http.response.body":
+            body = message.get("body", b"")
+            if body:
+                chunks.append(body)  # type: ignore[arg-type]
+            if len(chunks) >= ticks:
+                done.set()
+
+    # A ceiling, so a regression that reintroduces the hang fails rather than
+    # stalling CI.
+    await asyncio.wait_for(app(scope, receive, send), timeout=15)  # type: ignore[operator]
+    result["frames"] = chunks
+    result["body"] = b"".join(chunks)
+    return result
+
+
+def test_the_stream_opens_on_a_cookie_alone(client: TestClient) -> None:
+    """`EventSource` cannot set request headers — not "does not by default".
+
+    If the guard ever required a header on GETs, every device would stop
+    learning about remote writes while still showing its own data, which reads
+    as "nothing has changed on the other devices" rather than as a broken
+    connection. Silence presented as agreement.
+    """
+    _login(client)
+    result = asyncio.run(_open_stream(client.app, _cookie_header(client)))
+    assert result["status"] == 200, f"stream refused: {result['body']!r}"
+    headers = result["headers"]
+    assert isinstance(headers, dict)
+    assert headers["content-type"].startswith("text/event-stream")
+    assert headers["x-accel-buffering"] == "no", "a buffering proxy makes 'live' mean 'in batches'"
+    # The opening frame proves the route body ran rather than merely that the
+    # guard allowed it — a 200 from a handler that emits nothing is a stream
+    # the client waits on forever.
+    assert b"retry:" in result["body"]  # type: ignore[operator]
+
+
+def test_the_stream_is_refused_without_a_session(client: TestClient) -> None:
+    """Cookie-only must not mean unguarded."""
+    result = asyncio.run(_open_stream(client.app, ""))
+    assert result["status"] == 401
+
+
+def test_the_stream_reports_the_head_it_finds_on_connect(client: TestClient) -> None:
+    """A client that connects AFTER a write must not wait for the next one.
+
+    Emitting only on change would leave a device that reconnected at the wrong
+    moment sitting on a stale cursor until someone else happened to edit
+    something — which, on a personal app with one user, could be hours.
+    """
+    csrf = _login(client)
+    client.post("/api/sync?device=dev-a", json={"changes": [change("x")]}, headers=csrf)
+
+    result = asyncio.run(_open_stream(client.app, _cookie_header(client), ticks=2))
+    body = result["body"]
+    assert isinstance(body, bytes)
+    assert b"event: sync" in body, f"no head frame in {body!r}"
+    payload = json.loads(body.split(b"data: ")[1].split(b"\n")[0])
+    assert payload == {"head": 1}, "the stream did not report the head that already existed"
+
+
+def test_the_stream_reports_one_owner_head_to_that_owner_only(cfg: Config) -> None:
+    """The stream is a notification, but `head` is still someone's data.
+
+    A shared counter would tell one account how busy another one is, and — far
+    worse — would wake every device on every account's write, so each would
+    pull and find nothing. A stream that lies about whether you are behind is
+    worse than no stream.
+    """
+    with Auth(cfg.db_path) as auth:
+        auth.create_user("sai", PW, role="owner")
+        auth.create_user("other", PW, role="owner")
+
+    with TestClient(create_app(cfg)) as a, TestClient(create_app(cfg)) as b:
+        csrf_a = _login(a)
+        b.post("/api/auth/login", json={"username": "other", "password": PW}, headers=GUARD)
+        csrf_b = {CSRF_HEADER: b.cookies[CSRF_COOKIE], **GUARD}
+
+        # Two writes by "other", none by "sai".
+        b.post("/api/sync?device=dev-b", json={"changes": [change("p")]}, headers=csrf_b)
+        b.post("/api/sync?device=dev-b", json={"changes": [change("q", 1)]}, headers=csrf_b)
+
+        heads = {}
+        for label, c in (("sai", a), ("other", b)):
+            result = asyncio.run(_open_stream(c.app, _cookie_header(c), ticks=2))
+            body = result["body"]
+            assert isinstance(body, bytes)
+            heads[label] = json.loads(body.split(b"data: ")[1].split(b"\n")[0])["head"]
+
+        assert heads["other"] == 2
+        assert heads["sai"] == 0, f"one owner's head leaked into another's stream: {heads}"
+        assert csrf_a  # the login was real
+
+
+def test_the_stream_refuses_the_enrolment_trap_before_streaming(open_client: TestClient) -> None:
+    """No accounts enrolled: refuse with a 401, not a stream that dies.
+
+    This is the state the hub is actually in — enforcement is dormant until the
+    first user exists — so it is the live code path, not an edge case.
+
+    `_owner` refuses here because there is no identity to attribute records to,
+    and the refusal has to happen *before* the response starts. Resolved inside
+    the generator instead, the exception fires after `http.response.start` has
+    gone out: the browser sees a 200 `text/event-stream` that closes
+    immediately, and `EventSource` reconnects on a timer against a server that
+    will never let it in. A tight loop, forever, with no error anywhere.
+
+    AuthGuard cannot cover this one. It rejects session-less requests, but here
+    the guard is deliberately open — so the route is reached and `_owner` is
+    the only thing standing between a device and an owner id of nobody.
+    """
+    result = asyncio.run(_open_stream(open_client.app, ""))
+    assert result["status"] == 401, (
+        f"expected a refusal before the stream opened, got {result['status']} "
+        f"with body {result['body']!r}"
+    )
+    body = result["body"]
+    assert isinstance(body, bytes)
+    assert b"retry:" not in body, "the stream opened anyway — EventSource will loop on this"
+
+
+# ══ the Stage 3 gate, over HTTP with two real devices ════════════════════
+#
+# `test_sync.py` proves these three scenarios against the `Sync` class. That is
+# necessary and not sufficient: it calls Python methods in one process, so it
+# cannot catch a cursor the HTTP layer forgets to thread through, a device
+# identity taken from the wrong place, or a response field the client would
+# need and the endpoint does not send. Every one of those is invisible below
+# the HTTP boundary and fatal above it.
+#
+# The plan's gate is these three run on the phone. That still needs the phone —
+# but nothing else here is a stand-in, so the shortfall is "not yet on real
+# devices" rather than "not yet tested".
+
+
+def _sync(
+    c: TestClient, csrf: dict[str, str], device: str, *, since: int = 0, changes: list | None = None
+) -> dict:
+    resp = c.post(
+        f"/api/sync?device={device}&since={since}",
+        json={"changes": changes or []},
+        headers=csrf,
+    )
+    assert resp.status_code == 200, resp.text
+    return resp.json()
+
+
+def _two_devices(cfg: Config) -> Iterator[tuple[TestClient, dict, TestClient, dict]]:
+    """Two TestClients over ONE database: two devices, one account.
+
+    Separate clients rather than one client with two `device=` values, because
+    a shared cookie jar would hide a server that attributed records to the
+    session rather than to the device.
+    """
+    with Auth(cfg.db_path) as auth:
+        auth.create_user("sai", PW, role="owner")
+    with TestClient(create_app(cfg)) as a, TestClient(create_app(cfg)) as b:
+        yield a, _login(a), b, _login(b)
+
+
+@pytest.fixture
+def two_devices(cfg: Config) -> Iterator[tuple[TestClient, dict, TestClient, dict]]:
+    yield from _two_devices(cfg)
+
+
+def test_gate_aeroplane_mode_capture_arrives_exactly_once(two_devices) -> None:
+    """Capture offline, reconnect, and the other device sees it once.
+
+    "Exactly once" is the whole assertion. Twice is the failure people actually
+    hit: the push succeeded, the response was lost to the tunnel closing, the
+    client retried, and now there are two of everything — indistinguishable
+    from two things someone meant to write.
+    """
+    a, csrf_a, b, csrf_b = two_devices
+
+    # Three edits made with the radio off, pushed in one batch on reconnect.
+    offline = [change("n1", 0), change("n2", 1), change("n3", 2)]
+    first = _sync(a, csrf_a, "phone", changes=offline)
+    assert sorted(first["accepted"]) == ["journal/n1", "journal/n2", "journal/n3"]
+
+    # The response never arrived, so the client retries the identical batch.
+    replay = _sync(a, csrf_a, "phone", changes=offline)
+    assert sorted(replay["accepted"]) == ["journal/n1", "journal/n2", "journal/n3"], (
+        "a replay must report accepted — a client told 'rejected' would keep "
+        "the records dirty and retry them forever"
+    )
+    assert replay["head"] == first["head"], "the replay burned sequence numbers"
+
+    # The other device pulls once and sees three records, not six.
+    pulled = _sync(b, csrf_b, "laptop", since=0)
+    ids = [r["id"] for r in pulled["records"]]
+    assert sorted(ids) == ["n1", "n2", "n3"], f"expected each capture once, got {ids}"
+    assert len(ids) == len(set(ids))
+
+
+def test_gate_a_delete_survives_the_other_device_reconnecting(two_devices) -> None:
+    """Delete on one device while the other is offline — it stays deleted.
+
+    The failure is resurrection, and it is silent: the offline device still
+    holds the record, and if it diffs against what the server has rather than
+    against its own last-pushed state, the record looks like something the
+    server is missing. So it pushes it back, and the deletion undoes itself.
+    """
+    a, csrf_a, b, csrf_b = two_devices
+
+    _sync(a, csrf_a, "phone", changes=[change("doomed", 0, body={"v": 1})])
+    caught_up = _sync(b, csrf_b, "laptop", since=0)
+    assert [r["id"] for r in caught_up["records"]] == ["doomed"]
+    cursor_b = caught_up["cursor"]
+
+    # A deletes it. B is offline and does not know.
+    tomb = {"collection": "journal", "id": "doomed", "hlc": format_hlc(T0, 5, "phone"), "deleted": True}
+    _sync(a, csrf_a, "phone", changes=[tomb])
+
+    # B reconnects. The tombstone must be DELIVERED, not merely "absent from a
+    # list of live records" — a client that only ever receives live records can
+    # never learn that something was removed.
+    back = _sync(b, csrf_b, "laptop", since=cursor_b)
+    assert [(r["id"], r["deleted"]) for r in back["records"]] == [("doomed", True)]
+
+    # And B pushing its stale copy loses to the tombstone rather than
+    # resurrecting it, because the tombstone's clock is higher.
+    stale = _sync(
+        b, csrf_b, "laptop", since=back["cursor"], changes=[change("doomed", 1, "laptop", {"v": 1})]
+    )
+    assert [r["id"] for r in stale["rejected"]] == ["doomed"]
+    assert stale["rejected"][0]["winner"]["deleted"] is True, (
+        "the rejection must carry the winner — a client told only 'you lost' "
+        "cannot converge, and would push the same record on every sync"
+    )
+
+    # Third device, fresh: sees a tombstone and no live record.
+    fresh = _sync(a, csrf_a, "ipad", since=0)
+    live = [r for r in fresh["records"] if not r["deleted"]]
+    assert live == [], f"the deleted record came back: {live}"
+
+
+def test_gate_any_batch_in_any_order_gives_the_same_state(cfg: Config) -> None:
+    """Two devices' batches, both interleavings, one final state.
+
+    Without this the two devices both sync successfully and still disagree, and
+    which one is right depends on the order packets happened to arrive.
+    """
+    batch_a = [change("x", 1, "phone", {"who": "phone"}), change("y", 2, "phone", {"v": 1})]
+    batch_b = [change("x", 3, "laptop", {"who": "laptop"}), change("z", 4, "laptop", {"v": 2})]
+
+    states = []
+    for order in ((batch_a, "phone"), (batch_b, "laptop")), ((batch_b, "laptop"), (batch_a, "phone")):
+        # A fresh database per ordering, so neither run can observe the other.
+        fresh = replace(cfg, db_path=cfg.db_path.parent / f"order{len(states)}.db")
+        with Auth(fresh.db_path) as auth:
+            auth.create_user("sai", PW, role="owner")
+        with TestClient(create_app(fresh)) as c:
+            csrf = _login(c)
+            for changes, device in order:
+                _sync(c, csrf, device, changes=changes)
+            final = _sync(c, csrf, "observer", since=0)
+        states.append({r["id"]: (r["hlc"], r["body"], r["deleted"]) for r in final["records"]})
+
+    assert states[0] == states[1], f"order changed the outcome:\n{states[0]}\n{states[1]}"
+    # And the contested record went to the higher clock, not to whoever was last.
+    assert states[0]["x"][1] == {"who": "laptop"}
+
+
+def test_the_archive_names_the_device_that_overwrote_you(two_devices) -> None:
+    """"Replaced by MacBook-Pro at 14:02" — the name is the load-bearing word.
+
+    With only `device_id` the archive can say "replaced by mzr7x8abc12", which
+    tells nobody which of their own machines did it. The point of the archive
+    is to make an overwrite explicable, and an opaque id is not an explanation.
+    """
+    a, csrf_a, b, csrf_b = two_devices
+
+    a.post(
+        "/api/sync?device=phone&name=Realme%20GT%206&platform=android",
+        json={"changes": [change("shared", 1, "phone", {"who": "phone"})]},
+        headers=csrf_a,
+    )
+    b.post(
+        "/api/sync?device=laptop&name=MacBook-Pro&platform=macos",
+        json={"changes": [change("shared", 9, "laptop", {"who": "laptop"})]},
+        headers=csrf_b,
+    )
+
+    versions = a.get(
+        "/api/sync/history", params={"collection": "journal", "id": "shared"}
+    ).json()["versions"]
+
+    names = [v["device_name"] for v in versions]
+    assert names == ["MacBook-Pro", "Realme GT 6"], f"newest first, named: {names}"
+    # Both were stored — the phone's write simply lost its place to a higher
+    # clock. `rejected` is for a push that never landed at all, and that
+    # distinction is what tells the user whether their edit was overwritten or
+    # never arrived.
+    assert [v["outcome"] for v in versions] == ["accepted", "accepted"]
+    # The winner has to be identifiable, or the list cannot say what is live.
+    assert versions[0]["hlc"] > versions[1]["hlc"]
+
+
+def test_the_archive_keeps_a_version_whose_device_row_is_gone(cfg: Config) -> None:
+    """An append-only log must outlive the rest of the schema.
+
+    `sync_log` is the only record of a version that lost. If the device join
+    were an inner join, deleting a device row would silently remove every
+    version it ever wrote — and the archive would answer "no history" for a
+    record with plenty, which is the exact shape of absence-as-success.
+    """
+    with Auth(cfg.db_path) as auth:
+        auth.create_user("sai", PW, role="owner")
+    with TestClient(create_app(cfg)) as a:
+        csrf_a = _login(a)
+        a.post(
+            "/api/sync?device=ghost&name=Old%20Phone",
+            json={"changes": [change("kept", 1, "ghost", {"v": 1})]},
+            headers=csrf_a,
+        )
+
+        # A device row vanishing is not something the app does today, which is
+        # precisely why the join must not depend on it still being there.
+        with Sync(cfg.db_path) as s:
+            s._db.execute("DELETE FROM sync_devices WHERE id = 'ghost'")
+            s._db.commit()
+
+        versions = a.get(
+            "/api/sync/history", params={"collection": "journal", "id": "kept"}
+        ).json()["versions"]
+    assert len(versions) == 1, "the version disappeared with its device row"
+    assert versions[0]["device_name"] == "ghost", "the name must fall back to the id, not to empty"

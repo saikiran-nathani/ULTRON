@@ -33,16 +33,25 @@ person's device. Attributing personal records to it would be a guess.
 
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Body, HTTPException, Path, Query, Request
+from fastapi.responses import StreamingResponse
 
 from ..auth import Identity
 from ..sync import Change, Sync, SyncError
 
 log = logging.getLogger("trainwatch.server.sync")
+
+# Matching hub_api.py. One second is well inside "feels live" for a tick that
+# reads a single integer, and 20s of silence is short enough that a proxy or a
+# dozing phone does not decide the connection is dead.
+STREAM_POLL = 1.0
+STREAM_KEEPALIVE = 20.0
 
 # Module scope, not inside the factory: `from __future__ import annotations`
 # makes every annotation a string and FastAPI resolves those against module
@@ -214,5 +223,85 @@ def build_sync_router(sync_for: Callable[[], Sync]) -> APIRouter:
             "id": record_id,
             "versions": sync_for().history(owner, collection, record_id, limit=limit),
         }
+
+    @router.get("/events")
+    async def events(request: Request) -> StreamingResponse:
+        """Tell devices that something moved. Never send them the records.
+
+        The nudge carries one number — the owner's `seq` head — and nothing
+        else. That restraint is the whole design, and it follows from rule 2:
+
+        > `hlc` decides who wins, server-assigned `seq` decides what you still
+        > need.
+
+        A stream that pushed the records themselves would be a second delivery
+        path with its own ordering, racing the pull. The client's cursor may
+        only advance to a `seq` it has actually acknowledged, so a record
+        arriving out of band would either be applied without moving the cursor
+        (re-delivered forever on the next pull) or move the cursor past records
+        it never received (lost forever, silently). Sending a number and
+        letting the client pull keeps one ordered path to the data.
+
+        It also means **the stream is an optimisation and never the source of
+        truth.** A missed event costs latency, not correctness: the client is
+        still on its own timer, and its cursor is still the server's. So there
+        is no `Last-Event-ID` replay to get wrong, and a phone that spends the
+        night with its radio off wakes up and pulls exactly as it would have.
+        """
+        # Resolved out here, before the response starts. Inside the generator a
+        # 401 would arrive after `http.response.start` had already gone out —
+        # the browser would see a 200 stream that closes immediately, and
+        # `EventSource` would reconnect in a loop against a server that will
+        # never let it in.
+        owner = _owner(request)
+
+        async def gen() -> AsyncIterator[bytes]:
+            # Sent first, unconditionally: it proves the route body ran, and it
+            # sets the browser's reconnect delay before anything can go wrong.
+            yield b"retry: 3000\n\n"
+            last = -1
+            quiet = 0.0
+            while True:
+                if await request.is_disconnected():
+                    return
+                try:
+                    # `sync_for()` resolved INSIDE the worker thread. Called on
+                    # the event loop thread it would hand every concurrent
+                    # stream that one thread's SQLite connection, serialising
+                    # all of them on a single handle and defeating the pool.
+                    # `check_same_thread=False` makes that fail silently rather
+                    # than raise, which is how it survives review. See the same
+                    # note in hub_api.py, where it was found the hard way.
+                    head = await asyncio.to_thread(lambda: sync_for().head(owner))
+                    if head != last:
+                        # Fires on the first tick too, not only on a change: a
+                        # client that connects *after* a write must not have to
+                        # wait for the next one to learn it is behind.
+                        last = head
+                        yield f"event: sync\ndata: {json.dumps({'head': head})}\n\n".encode()
+                        quiet = 0.0
+                    else:
+                        quiet += STREAM_POLL
+                        if quiet >= STREAM_KEEPALIVE:
+                            quiet = 0.0
+                            yield b": keepalive\n\n"
+                except Exception:
+                    # One bad tick must not tear down a live connection.
+                    log.exception("sync stream tick failed")
+                    yield b": error\n\n"
+                await asyncio.sleep(STREAM_POLL)
+
+        return StreamingResponse(
+            gen(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache, no-transform",
+                "Connection": "keep-alive",
+                # nginx and friends buffer streaming responses by default,
+                # which turns a live push into a push that arrives in batches
+                # whenever the buffer fills.
+                "X-Accel-Buffering": "no",
+            },
+        )
 
     return router
