@@ -802,3 +802,38 @@ def test_the_archive_keeps_a_version_whose_device_row_is_gone(cfg: Config) -> No
         ).json()["versions"]
     assert len(versions) == 1, "the version disappeared with its device row"
     assert versions[0]["device_name"] == "ghost", "the name must fall back to the id, not to empty"
+
+
+def test_a_device_id_that_is_unsafe_in_a_url_is_refused_at_registration(client: TestClient) -> None:
+    """The id has to be safe everywhere it travels, and one place is a path.
+
+    `/api/sync/devices/{id}/retire` takes the id as a path segment, and a path
+    is decoded before routing. So a device registered as `a%25b` could never be
+    retired: the call would look up `a%b`, find nothing, and report success for
+    a device it never touched.
+
+    That is not a cosmetic failure. A device that cannot be retired pins the
+    tombstone GC watermark — `min(last_pull_seq)` across non-retired devices —
+    at its cursor forever, so the one control meant to release it would sit
+    there doing nothing while the log grew without bound.
+
+    Refusing at registration is the only place that fixes it for every
+    downstream use at once.
+    """
+    csrf = _login(client)
+    for bad in ("a%25b", "has space", "slash/es", "quote'd", "x" * 65):
+        resp = client.post(
+            f"/api/sync?device={quote(bad, safe='')}",
+            json={"changes": []},
+            headers=csrf,
+        )
+        assert resp.status_code == 422, f"{bad!r} was accepted as a device id: {resp.text}"
+
+    # And the shapes the client actually mints still work — `deviceId()` in
+    # clock.ts emits base36 with `_.:-` allowed, and uses the same string as
+    # the HLC node, so the two charsets must not disagree.
+    for good in ("mzr7x8abc12", "dev-a", "mac.book:1", "A_b.c-d:e"):
+        resp = client.post(
+            f"/api/sync?device={good}", json={"changes": []}, headers=csrf
+        )
+        assert resp.status_code == 200, f"{good!r} was refused: {resp.text}"

@@ -47,6 +47,7 @@ restored, which is a better trade than a merge nobody can audit.
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 import time
 from dataclasses import dataclass, field
@@ -98,6 +99,22 @@ _MAX_COLLECTION = 128
 # those plus a separator. 512 leaves room for a scheme that has not been
 # invented yet while still refusing an id that could only be abuse.
 _MAX_RECORD_ID = 512
+
+# A device id has to be safe in more places than a record id does: it travels
+# as a path segment in `/api/sync/devices/{id}/retire`, it is a log field, and
+# the client uses the same string as its HLC node — so it is already bound by
+# `hlc._NODE_RE` on that side. Unconstrained here, a device could register as
+# `a%25b` through the push endpoint's `?device=` query and then be
+# **unretirable**: a path segment is decoded before routing, so the retire call
+# would look for a different id and report success for a device it never
+# touched. That device would pin the tombstone GC watermark
+# (`min(last_pull_seq)` across non-retired devices) at its cursor forever, with
+# the one control meant to release it quietly doing nothing.
+#
+# Same charset as the HLC node, deliberately: the client uses one value for
+# both, so two different rules would mean an id that is valid as a device and
+# invalid as a clock.
+_DEVICE_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,64}$")
 
 
 class SyncError(ValueError):
@@ -301,6 +318,10 @@ class Sync:
         collected out from under it.
         """
         device_id = _name(device_id, "device id")
+        if not _DEVICE_RE.match(device_id):
+            raise SyncError(
+                f"device id must match {_DEVICE_RE.pattern!r}, got {device_id!r}"
+            )
         now = time.time()
         self._db.execute(
             """INSERT INTO sync_devices

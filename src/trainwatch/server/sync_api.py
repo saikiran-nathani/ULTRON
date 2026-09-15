@@ -132,9 +132,13 @@ def build_sync_router(sync_for: Callable[[], Sync]) -> APIRouter:
             # cannot stop the device from syncing the rest — see Quarantine.
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-        s.register(owner, device, name=name, platform=platform)
-
+        # Registration is inside the guard, not before it. A refused device id
+        # is a 422 like any other unprocessable input; left outside, the same
+        # refusal surfaced as a 500 — which tells the client "the server is
+        # broken, retry later" about a request that will never succeed, so it
+        # would retry forever.
         try:
+            s.register(owner, device, name=name, platform=platform)
             result = s.sync(owner, device, changes=parsed, since_seq=since, limit=limit)
         except SyncError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
