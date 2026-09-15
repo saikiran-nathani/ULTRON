@@ -70,6 +70,14 @@ function cleanBlob() {
       },
       { id: "p2", name: "Beta", tasks: [] },
     ],
+    research: {
+      experiments: [
+        // Banked against a project, so the reference is live.
+        { id: "mzr7x8abx", name: "lr sweep", status: "done", projectId: "p1", runId: "run-41" },
+        // And the honest common case: an experiment that fed nothing yet.
+        { id: "mzr7x8aby", name: "attn ablation", status: "running", projectId: null, runId: "" },
+      ],
+    },
     career: { jobs: [], certifications: [] },
     journal: {
       entries: [{ id: "mzr7x8ab6", content: "hi", mood: 3 }],
@@ -231,9 +239,14 @@ describe("dangling references", () => {
     delete bucket(snap, "projects")["p1"];
 
     const found = reconcile(snap);
-    expect(found.filter((f) => f.kind === "dangling-reference")).toHaveLength(3);
+    // Four, not three: deleting `p1` breaks two habit ticks, one study
+    // session's plan... and the experiment banked against that project. The
+    // count went up when `research.experiments.projectId` joined the table,
+    // which is the table working — a reference nobody checks is a reference
+    // that silently dangles.
+    expect(found.filter((f) => f.kind === "dangling-reference")).toHaveLength(4);
     expect(found.filter((f) => f.kind === "orphaned-child")).toHaveLength(2);
-    expect(new Set(found.map((f) => f.collection)).size).toBe(3);
+    expect(new Set(found.map((f) => f.collection)).size).toBe(4);
   });
 
   it("reports a pointer into a collection that is gone entirely", () => {
@@ -277,16 +290,23 @@ describe("orphaned children", () => {
     delete bucket(snap, "projects")["p1"];
 
     const found = reconcile(snap);
-    expect(found).toHaveLength(2);
-    expect(found[0]).toMatchObject({
+    // Deleting `p1` orphans its two tasks AND dangles the experiment banked
+    // against it, so the whole list is three. Filtered here because this test
+    // is about the orphan half specifically.
+    const orphans = found.filter((f) => f.kind === "orphaned-child");
+    expect(orphans).toHaveLength(2);
+    expect(found).toHaveLength(3);
+    expect(orphans[0]).toMatchObject({
       kind: "orphaned-child",
       collection: "projects.tasks",
       id: joinKey("p1", "t1"),
       missing: { collection: "projects", id: "p1" },
     });
     // No field: an orphan's pointer is its own key, and naming a field here
-    // would be inventing one.
-    expect(found[0]!.field).toBeUndefined();
+    // would be inventing one. Asserted on the ORPHAN, not on found[0] — the
+    // canonical sort puts the dangling-reference finding first now, and an
+    // index into a sorted list is not the same claim as "the orphan".
+    expect(orphans[0]!.field).toBeUndefined();
   });
 
   it("recovers the parent id from a key with colons on both sides", () => {

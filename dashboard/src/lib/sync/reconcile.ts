@@ -128,6 +128,12 @@ export type References = readonly ReferenceSpec[];
 export const NEXUS_REFERENCES: References = [
   { from: "journal.habitCompletions", field: "habitId", to: "journal.habits", holder: "habit tick", target: "habit" },
   { from: "academics.studyPlanner.sessions", field: "plan", to: "academics.studyPlanner.plans", holder: "study session", target: "study plan" },
+  // An experiment banked against a project. `runId` is deliberately NOT here:
+  // it names a trainwatch run, which lives in the hub's own tables and never
+  // enters the synced blob — so the reconciler cannot resolve it and must not
+  // claim to. A reference table that lists a target it cannot see would report
+  // every experiment as broken.
+  { from: "research.experiments", field: "projectId", to: "projects", holder: "experiment", target: "project" },
 ];
 
 /**

@@ -19,7 +19,7 @@ export type ISODateTime = string; // full ISO timestamp
  * is explicit about not doing.
  */
 
-export const NEW_SCHEMA_VERSION = 4;
+export const NEW_SCHEMA_VERSION = 5;
 
 /* ───────────── Academics ───────────── */
 
@@ -433,6 +433,42 @@ export interface Settings {
 
 /* ───────────── Root ───────────── */
 
+/* ───────────── Research (the ML track) ───────────── */
+
+export type ExperimentStatus = "planned" | "running" | "done" | "abandoned";
+
+/** One experiment, and the run that produced it.
+ *
+ * `runId` is the reason this domain exists in *this* app rather than in a
+ * notebook: it names a trainwatch run, so an experiment is joined to the loss
+ * curve, the GPU trace and the checkpoint that came out of it. Two apps merged
+ * into one is otherwise just two apps sharing a URL.
+ *
+ * It is a plain string, not a foreign key into the synced blob: runs live in
+ * the hub's own tables on the server, not in NexusData, so the reconciler
+ * cannot check it and must not pretend to. An unknown `runId` is a link that
+ * resolves to nothing, which the Research screen shows as such.
+ */
+export interface Experiment {
+  id: ID;
+  name: string;
+  /** What you expected to happen. Written before, not after. */
+  hypothesis: string;
+  status: ExperimentStatus;
+  started: ISODate | null;
+  ended: ISODate | null;
+  /** A trainwatch run id, or "" when the experiment was not a training run. */
+  runId: string;
+  /** What actually happened. The point of the record. */
+  result: string;
+  /** Where the work was banked, if it fed a project. */
+  projectId: ID | null;
+}
+
+export interface Research {
+  experiments: Experiment[];
+}
+
 export interface NexusData {
   schemaVersion: number;
   settings: Settings;
@@ -443,4 +479,5 @@ export interface NexusData {
   dashboard: Dashboard;
   routine: Routine;
   roadmap: Roadmap;
+  research: Research;
 }

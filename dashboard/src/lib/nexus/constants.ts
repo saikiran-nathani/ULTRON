@@ -49,7 +49,11 @@ export type JobStatus = (typeof JOB_STATUSES)[number];
 export const CERT_STATUSES = ["Studying", "Scheduled", "Passed", "Expired"] as const;
 export type CertStatus = (typeof CERT_STATUSES)[number];
 
-export const READING_TYPES = ["Book", "Course", "Article", "Video", "Documentation"] as const;
+// "Paper" added for the Research track. Widening the union rather than
+// creating a second list, because a paper queued to read is a reading-list
+// item in every respect that matters — and two lists would mean deciding, every
+// time, which of them a thing belongs in.
+export const READING_TYPES = ["Paper", "Book", "Course", "Article", "Video", "Documentation"] as const;
 export type ReadingType = (typeof READING_TYPES)[number];
 
 export const READING_STATUSES = ["Queue", "Reading", "Done", "Paused"] as const;

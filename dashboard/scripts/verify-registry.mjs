@@ -20,12 +20,16 @@
  * lives in nexus. So this points the real registry at the real data.
  *
  * Usage:
- *   node scripts/verify-registry.mjs [path-to-nexus]
+ *   node scripts/verify-registry.mjs
  *
- * Defaults to $NEXUS_DIR, then a few sibling guesses. Exits non-zero on data
- * loss, an uncovered collection, or a broken property. Folds into CI in Stage
- * 4, when the model is ported into this repo and nexus stops being a
- * prerequisite.
+ * Reads THIS repo's `src/lib/nexus/migrate.ts`. It used to locate a sibling
+ * nexus checkout, which was right while the model lived there and wrong the
+ * moment Stage 4 ported it: the PWA's model grew a `research` domain that
+ * nexus does not have, so the check went on validating a shape the app no
+ * longer uses — passing, while covering the wrong thing.
+ *
+ * Now that it needs nothing outside this repo it runs in `npm run verify`,
+ * which is what the earlier header promised for this stage.
  */
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
@@ -36,25 +40,6 @@ import { fileURLToPath } from "node:url";
 const HERE = resolve(fileURLToPath(import.meta.url), "..");
 const DASH = resolve(HERE, "..");
 
-function findNexus() {
-  const candidates = [
-    process.argv[2],
-    process.env.NEXUS_DIR,
-    resolve(DASH, "../../../nexus"),
-    resolve(DASH, "../../../../nexus"),
-  ].filter(Boolean);
-  for (const c of candidates) {
-    if (existsSync(join(c, "src/lib/migrate.ts"))) return resolve(c);
-  }
-  console.error(
-    "Could not find a nexus checkout (looked for src/lib/migrate.ts in):\n  " +
-      candidates.join("\n  ") +
-      "\nPass the path as an argument or set NEXUS_DIR.",
-  );
-  process.exit(2);
-}
-
-const NEXUS = findNexus();
 const ESBUILD = join(DASH, "node_modules/.bin/esbuild");
 if (!existsSync(ESBUILD)) {
   console.error(`esbuild not found at ${ESBUILD} — run npm install in ${DASH}.`);
@@ -65,7 +50,7 @@ const work = mkdtempSync(join(tmpdir(), "verify-registry-"));
 writeFileSync(
   join(work, "entry.ts"),
   `
-import { makeDefaultData } from ${JSON.stringify(join(NEXUS, "src/lib/migrate.ts"))};
+import { makeDefaultData } from ${JSON.stringify(join(DASH, "src/lib/nexus/migrate.ts"))};
 import { NEXUS_REGISTRY, flatten, rehydrate, REST } from ${JSON.stringify(join(DASH, "src/lib/sync/registry.ts"))};
 import { sameRecord } from ${JSON.stringify(join(DASH, "src/lib/sync/flatten.ts"))};
 

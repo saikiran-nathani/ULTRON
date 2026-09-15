@@ -8,6 +8,7 @@ import type {
   Course,
   Habit,
   HabitCompletion,
+  Experiment,
 } from "./types";
 import { uid } from "./format";
 import { makeRoadmapSeed } from "./roadmapSeed";
@@ -53,6 +54,10 @@ export function makeDefaultData(): NexusData {
     dashboard: { todos: [] },
     routine: { lastCompletedDate: null, time: "23:30" },
     roadmap: makeRoadmapSeed(),
+    // Seeded empty on purpose. Every other block here either has content worth
+    // starting from or is a settings object; an experiment log that arrives
+    // pre-populated would be inventing work you have not done.
+    research: { experiments: [] },
   };
 }
 
@@ -346,5 +351,10 @@ export function normalize(parsed: Record<string, unknown>): NexusData {
     dashboard: { ...d.dashboard, ...(p.dashboard ?? {}) },
     routine: { ...d.routine, ...(p.routine ?? {}) },
     roadmap: p.roadmap ?? d.roadmap,
+    research: {
+      experiments: Array.isArray((p.research as { experiments?: unknown })?.experiments)
+        ? ((p.research as { experiments: Experiment[] }).experiments)
+        : [],
+    },
   };
 }

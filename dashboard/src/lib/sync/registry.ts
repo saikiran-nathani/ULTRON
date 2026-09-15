@@ -419,6 +419,7 @@ export const NEXUS_REGISTRY: Registry = [
   { name: "dashboard.todos", path: "dashboard.todos", kind: "records" },
   { name: "roadmap.phases", path: "roadmap.phases", kind: "records" },
   { name: "roadmap.layers", path: "roadmap.layers", kind: "records" },
+  { name: "research.experiments", path: "research.experiments", kind: "records" },
 
   // ── nested records ──
   { name: "academics.courses.assignments", path: "academics.courses[].assignments", kind: "nested" },

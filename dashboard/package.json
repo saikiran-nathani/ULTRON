@@ -9,7 +9,7 @@
     "typecheck": "tsc -b --noEmit",
     "preview": "vite preview",
     "test": "npm run test:sw && npm run test:unit",
-    "verify": "npm run typecheck && npm run test && npm run build",
+    "verify": "npm run typecheck && npm run test && npm run verify:registry && npm run build",
     "test:sw": "node --test scripts/sw-routing.test.mjs",
     "test:unit": "vitest run",
     "verify:registry": "node scripts/verify-registry.mjs"
