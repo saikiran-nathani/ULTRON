@@ -122,3 +122,83 @@ def test_units_raise_the_file_descriptor_ceiling(tmp_path: Path) -> None:
     assert f"LimitNOFILE={service._MAX_FILES}" in unit
 
     assert service._MAX_FILES > 256, "the ceiling must actually be raised"
+
+
+# ══ the unit file against systemd's own schema ═══════════════════════════
+
+
+def _sections(text: str) -> dict[str, list[str]]:
+    """Group a unit file's keys by the section they appear in."""
+    out: dict[str, list[str]] = {}
+    section = ""
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith("[") and line.endswith("]"):
+            section = line[1:-1]
+        elif "=" in line and not line.startswith("#"):
+            out.setdefault(section, []).append(line.split("=", 1)[0])
+    return out
+
+
+# Where systemd actually reads each key. The rate-limit pair is the trap: both
+# were [Service] options before v229 (2016) and are [Unit] options after, and
+# the migration is silent — systemd logs "Unknown key name" once at load and
+# then uses the default.
+_SECTION_OF = {
+    "Description": "Unit",
+    "After": "Unit",
+    "Wants": "Unit",
+    "StartLimitBurst": "Unit",
+    "StartLimitIntervalSec": "Unit",
+    "Type": "Service",
+    "WorkingDirectory": "Service",
+    "ExecStart": "Service",
+    "Restart": "Service",
+    "RestartSec": "Service",
+    "LimitNOFILE": "Service",
+    "MemoryMax": "Service",
+    "Environment": "Service",
+    "WantedBy": "Install",
+}
+
+
+@pytest.mark.parametrize("name", sorted(service.UNITS))
+def test_every_systemd_key_is_in_the_section_systemd_reads_it_from(name: str) -> None:
+    """A key in the wrong section is ignored, and nothing says so.
+
+    This started as a real defect: `StartLimitBurst` and
+    `StartLimitIntervalSec` were emitted under `[Service]`, where they have not
+    been read since systemd v229. The unit therefore inherited
+    `DefaultStartLimitIntervalSec=10s`, and with `RestartSec=5` a crashing
+    service gets about two restarts per window, never reaches a burst of five,
+    and **restarts forever** — exactly the crash loop the setting was added to
+    prevent.
+
+    The generator had tests for its content and none for its schema, so the
+    file read as configured while the protection did not exist. That is the
+    same shape as a phase with no measurement reading as done.
+    """
+    text = service._systemd(service.UNITS[name], repo=Path("/repo"), env={"A": "b"})
+    for section, keys in _sections(text).items():
+        for key in keys:
+            expected = _SECTION_OF.get(key)
+            assert expected is not None, (
+                f"{key} is not in this test's table — add it, with the section "
+                f"systemd documents, rather than deleting the assertion"
+            )
+            assert section == expected, (
+                f"[{section}] {key} is ignored by systemd; it belongs in [{expected}]"
+            )
+
+
+def test_the_restart_limit_is_not_left_to_systemds_default(name: str = "hub") -> None:
+    """The default burst is also 5, so asserting the burst alone proves nothing.
+
+    `systemctl show -p StartLimitBurst` returns 5 whether the unit sets it or
+    not. Only the interval distinguishes a unit that configured the limit from
+    one that inherited it — which is why the interval is the thing to assert,
+    here and in the on-box gate.
+    """
+    text = service._systemd(service.UNITS[name], repo=Path("/repo"), env={})
+    assert "StartLimitIntervalSec=300" in text
+    assert "StartLimitBurst=5" in text

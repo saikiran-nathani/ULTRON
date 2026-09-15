@@ -232,11 +232,25 @@ fi
 # failed, host-allowlist discovery returned localhost only and the dashboard
 # answered 421 to its own URL — a rejection that reads like DNS.
 #
-# This list is derived from the source, not remembered: every subprocess call
-# and shutil.which() under src/trainwatch.
+# Derived from the source, not remembered — and derived twice, because the
+# first pass was wrong. Scanning only direct `subprocess.*` calls misses the
+# wrappers (`_run(["crontab", "-l"])` in cli.py goes through cli.py's own
+# helper), and scanning only call arguments misses `cmd = ["nvidia-smi", ...]`
+# assigned first and passed after. The union of both passes gives seven
+# binaries; these three are the ones a **supervised unit** can reach.
+#
+# `crontab` was in this list and is not any more. It is real — cli.py:1139
+# shells out to it — but only from `trainwatch doctor`, which a human runs
+# with a human's PATH. `cron` is not installed on a minimal Ubuntu, so the
+# check failed on a fresh box for a reason that was not a PATH bug, and
+# installing `cron` to turn it green would have been papering over the check.
+#
+# git, tensorboard, pbcopy and sysctl are interactive-CLI paths too. Two of
+# them will fail on Linux whatever the PATH says: `pbcopy` does not exist and
+# `sysctl` takes different flags.
 UNIT_PATH='/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin'
 MISSING=""
-for bin in tailscale tmux crontab nvidia-smi; do
+for bin in tailscale tmux nvidia-smi; do
   if sh_ "PATH='$UNIT_PATH' command -v $bin >/dev/null 2>&1"; then
     :
   else
@@ -244,7 +258,7 @@ for bin in tailscale tmux crontab nvidia-smi; do
   fi
 done
 if [ -z "$MISSING" ]; then
-  ok "all shelled-out binaries resolve under a unit's PATH (tailscale tmux crontab nvidia-smi)"
+  ok "every binary a unit reaches resolves under its PATH (tailscale tmux nvidia-smi)"
 else
   fail "not on a unit's PATH:$MISSING — set Environment=\"PATH=...\" in the unit"
 fi
@@ -274,7 +288,7 @@ else
              1. On the Mac:  launchctl bootout gui/$(id -u)/com.trainwatch.hub
              2. Copy var/trainwatch.db to the TUF  (rsync; the Mac's hub is
                 now stopped, so there is exactly one writer)
-             3. On the TUF:  trainwatch service install hub   # renders the unit
+             3. On the TUF:  trainwatch service hub --write   # renders the unit
                              systemctl --user enable --now trainwatch-hub
              4. Add MemoryMax=512M to the unit — ~14x the measured 35 MB RSS
              5. Repoint `tailscale serve` at the TUF, off on the Mac

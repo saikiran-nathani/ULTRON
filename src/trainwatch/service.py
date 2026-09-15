@@ -204,10 +204,28 @@ def _systemd(unit: Unit, *, repo: Path, env: dict[str, str]) -> str:
     # `WantedBy=default.target` is a *user* unit, which needs
     # `loginctl enable-linger` to survive logout -- the same requirement the
     # curriculum's headless-boot step already imposes.
+    # The rate limit lives in [Unit], and that is not a style choice: these two
+    # keys moved out of [Service] in systemd v229 (2016). Emitted under
+    # [Service] they parse as unknown keys, are logged once at load time and
+    # then ignored — so the unit inherits DefaultStartLimitIntervalSec=10s
+    # instead of the 300 written here.
+    #
+    # Which silently removes the protection entirely. With RestartSec=5 a
+    # crashing service manages about two restarts per 10-second window, never
+    # reaches a burst of 5, and therefore restarts **forever** — precisely the
+    # crash loop the setting exists to stop. A unit file that looks configured
+    # and is not, which is the failure this project keeps finding.
+    #
+    # Found by another session reading this file; there was no test, because
+    # the generator's output was never asserted against systemd's own schema.
     return f"""[Unit]
 Description={unit.description}
 After=network-online.target
 Wants=network-online.target
+# A crash loop that restarts forever hides the bug and fills the disk with
+# logs. Five failures in five minutes and it stays down, visibly.
+StartLimitBurst=5
+StartLimitIntervalSec=300
 
 [Service]
 Type=simple
@@ -215,10 +233,6 @@ WorkingDirectory="{repo}"
 ExecStart={argv}
 Restart=on-failure
 RestartSec=5
-# A crash loop that restarts forever hides the bug and fills the disk with
-# logs. Five failures in five minutes and it stays down, visibly.
-StartLimitBurst=5
-StartLimitIntervalSec=300
 LimitNOFILE={_MAX_FILES}
 MemoryMax={unit.memory_mb}M{environment}
 

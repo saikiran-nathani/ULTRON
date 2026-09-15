@@ -101,10 +101,21 @@ else
 
   # A crash loop that restarts forever hides the bug and fills the disk with
   # logs. Restart= without a rate limit is only half the setting.
-  if sh_ "systemctl --user show $UNIT -p StartLimitBurst --value" 2>/dev/null | grep -qE '^[1-9]'; then
-    pass "restart rate limit is set, so a crash loop stops visibly"
+  #
+  # Assert the INTERVAL, not the burst. systemd's DefaultStartLimitBurst is
+  # itself 5, so `show -p StartLimitBurst` returns a non-zero number whether
+  # the unit set anything or not — the old check here passed on the default and
+  # would have reported "rate limit is set" for a unit that had none. That is
+  # absence-of-evidence-as-success inside the gate whose whole job is to catch
+  # it. Only the interval distinguishes configured from inherited: the default
+  # is 10s, and 10s with RestartSec=5 allows about two restarts per window, so
+  # a burst of 5 is never reached and the service restarts forever.
+  INTERVAL="$(sh_ "systemctl --user show $UNIT -p StartLimitIntervalSec --value" 2>/dev/null | tr -d '[:space:]')"
+  BURST="$(sh_ "systemctl --user show $UNIT -p StartLimitBurst --value" 2>/dev/null | tr -d '[:space:]')"
+  if [ "$INTERVAL" = "300000000" ] || [ "$INTERVAL" = "5min" ]; then
+    pass "restart rate limit is configured: ${BURST:-?} failures in ${INTERVAL} (not systemd's 10s default)"
   else
-    miss "no restart rate limit — a crash loop would restart forever and hide the cause"
+    miss "restart rate limit is systemd's default (interval=${INTERVAL:-unset}), not the unit's 5 minutes — check that StartLimit* are in [Unit], because under [Service] systemd ignores them silently"
   fi
 fi
 
