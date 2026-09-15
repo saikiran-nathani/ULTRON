@@ -324,6 +324,18 @@ def install() -> int:
         # optional.
         "EnvironmentVariables": {
             "PATH": "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+            # Carried into the plist, not left to the shell. `_urls()` honours
+            # TRAINWATCH_PROBE_URL, and a test has always said that exists "so
+            # it can point at the TUF once the hub moves there" — but the
+            # installer could not set it, so the installed timer could only
+            # ever probe localhost.
+            #
+            # After the migration localhost is nothing at all, so the timer
+            # would have reported the hub down every five minutes forever. The
+            # worse version: something else binds 8730 later and the probe
+            # cheerfully reports *that* as the hub being healthy.
+            **({"TRAINWATCH_PROBE_URL": os.environ["TRAINWATCH_PROBE_URL"]}
+               if os.environ.get("TRAINWATCH_PROBE_URL") else {}),
         },
     }
     PLIST.parent.mkdir(parents=True, exist_ok=True)
@@ -340,10 +352,24 @@ def install() -> int:
     print(f"  plist  {PLIST}")
     print(f"  log    {LOG}")
     print("\nVerify by demonstration, which is the only way this counts:")
-    print("  launchctl kickstart -k gui/$(id -u)/com.trainwatch.hub   # bounce the hub")
-    print(f'  "{sys.executable}" "{Path(__file__).resolve()}" --once   # should say ok')
-    print("  launchctl bootout gui/$(id -u)/com.trainwatch.hub        # stop it")
-    print(f'  "{sys.executable}" "{Path(__file__).resolve()}" --once   # should FAIL')
+    here = f'"{sys.executable}" "{Path(__file__).resolve()}" --once'
+    # The stop/start commands depend on where the hub lives, and it moved. This
+    # block used to hard-code `launchctl ... com.trainwatch.hub`, which stopped
+    # existing the moment the hub was migrated to the TUF — printing
+    # instructions that fail is how a demonstration quietly stops being run.
+    target = _urls()[0]
+    if "127.0.0.1" in target or "localhost" in target:
+        stop = "launchctl bootout gui/$(id -u)/com.trainwatch.hub"
+        start = "launchctl kickstart -k gui/$(id -u)/com.trainwatch.hub"
+    else:
+        host = target.split("//", 1)[-1].split("/")[0].split(":")[0]
+        stop = f"ssh {host} 'systemctl --user stop trainwatch-hub'"
+        start = f"ssh {host} 'systemctl --user start trainwatch-hub'"
+    print(f"  {start:<58} # bring it up")
+    print(f"  {here}   # should say ok")
+    print(f"  {stop:<58} # stop it")
+    print(f"  {here}   # should FAIL")
+    print("\n  A probe nobody has watched fail is a probe nobody knows is wired up.")
     return 0
 
 
