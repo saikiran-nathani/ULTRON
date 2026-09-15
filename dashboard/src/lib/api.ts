@@ -82,6 +82,26 @@ export interface SystemInfo {
 
 export type Series = Record<string, [number, number][]>;
 
+/** A failed response, with the status as a field rather than only in prose.
+ *
+ * The message keeps its exact shape, because things already read it. But a
+ * caller that needs to branch on the status had to parse it back out with a
+ * regex over an error string — which is a contract nobody declared and the
+ * next person to improve the wording would silently break. The Research
+ * screen's run-link probe does exactly that branch: 404 means "the hub says
+ * no such run", anything else means "we could not ask", and confusing those
+ * two is the distinction that screen exists to preserve.
+ */
+export class HttpError extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+  ) {
+    super(message);
+    this.name = "HttpError";
+  }
+}
+
 export async function getJSON<T>(path: string, signal?: AbortSignal): Promise<T> {
   const res = await fetch(path, { signal, headers: { Accept: "application/json" } });
   if (!res.ok) {
@@ -92,7 +112,7 @@ export async function getJSON<T>(path: string, signal?: AbortSignal): Promise<T>
     // ones that swallow errors keep rendering stale numbers as if they were
     // live, which is the failure mode this whole project is about.
     if (res.status === 401) reportUnauthorized();
-    throw new Error(`${res.status} ${res.statusText} — ${path}`);
+    throw new HttpError(res.status, `${res.status} ${res.statusText} — ${path}`);
   }
   return (await res.json()) as T;
 }

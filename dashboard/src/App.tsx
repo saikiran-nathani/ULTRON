@@ -109,7 +109,7 @@ function Workspace({
   const [device, setDevice] = useState(() => deviceName());
 
   const { hub, connection: hubConn, refresh: refreshHub } = useHub();
-  const { state, connection: trainConn } = useLiveState(runId);
+  const { state, connection: trainConn, refresh: refreshState } = useLiveState(runId);
   const system = useSystem();
 
   // Boot the local-first store and wire sync to it — here, inside Workspace,
@@ -214,7 +214,9 @@ function Workspace({
           {screen === "capture" && <CaptureScreen />}
           {screen === "courses" && <CoursesScreen />}
           {screen === "projects" && <ProjectsScreen />}
-          {screen === "research" && <ResearchScreen />}
+          {screen === "research" && (
+            <ResearchScreen state={state} connection={trainConn} refresh={refreshState} />
+          )}
           {screen === "learn" && <LearnScreen />}
           {screen === "career" && <CareerScreen />}
           {screen === "brain" && (

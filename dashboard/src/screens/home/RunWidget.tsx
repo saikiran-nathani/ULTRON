@@ -29,6 +29,7 @@
 import { Activity, BrainCircuit, RefreshCw, WifiOff } from "lucide-react";
 import { Button, Card, CardHead, Chip, CountUp, Stat } from "@/components/ui";
 import type { Connection, State } from "@/lib/api";
+import { shortDuration } from "@/lib/format";
 import { statusOf } from "@/lib/status";
 import type { ScreenId } from "@/config/nav";
 
@@ -162,7 +163,12 @@ export function RunWidget({
         <Stat label="step" value={<CountUp value={state.run.last_step} />} size="sm" />
         <Stat
           label="heartbeat"
-          value={beat ? `${Math.round(beat.age)}s` : "—"}
+          // `shortDuration`, not raw seconds. A dead trainer's heartbeat reads
+          // "2042978s", which is 23 days rendered as a number nobody parses —
+          // and this is the one figure on the widget whose whole job is to
+          // answer "is it still alive?" at a glance. The formatter already
+          // exists; the widget was reimplementing it badly.
+          value={beat ? shortDuration(beat.age) : "—"}
           size="sm"
           color={
             beat && beat.age > beat.timeout ? "var(--color-bad)" : "var(--color-fg)"
