@@ -413,35 +413,80 @@ def test_any_batch_in_any_order_gives_the_same_state(cfg: Config) -> None:
 # ══ validation and refusal ═══════════════════════════════════════════════
 
 
-def test_a_clock_beyond_the_drift_ceiling_is_refused(sync: Sync) -> None:
+def test_a_clock_beyond_the_drift_ceiling_is_quarantined(sync: Sync) -> None:
     """One wrong clock would otherwise win every future conflict forever."""
     sync.register(OWNER, "dev-a")
     absurd = format_hlc(now_ms() + MAX_DRIFT_MS + 60_000, 0, "dev-a")
-    with pytest.raises(SyncError, match="ahead of the server"):
-        sync.push(OWNER, "dev-a", [ch("journal", "x", absurd)])
-    assert sync.snapshot(OWNER) == {}
+    result = sync.push(OWNER, "dev-a", [ch("journal", "x", absurd)])
+    assert [q.record_id for q in result.quarantined] == ["x"]
+    assert "ahead of the server" in result.quarantined[0].reason
+    assert sync.snapshot(OWNER) == {}, "a quarantined change was stored anyway"
+    assert sync.head(OWNER) == 0, "a quarantined change burned a sequence number"
 
 
-def test_a_refused_batch_applies_nothing(sync: Sync) -> None:
-    """Atomicity. A half-applied push leaves the client unable to diff.
+def test_one_unstorable_change_does_not_block_the_rest_of_the_batch(sync: Sync) -> None:
+    """The wedge this replaced.
 
-    Its next diff would be against a state neither side agrees on, and the
-    disagreement would be invisible.
+    A client keeps a change in its dirty set until the server acknowledges it.
+    When one unstorable record failed the whole batch, the next push carried the
+    same record and failed the same way — so the device never synced again, and
+    the only symptom was a 422 that no screen displayed. Losing one record
+    visibly beats losing every future record silently.
+
+    Atomicity is unchanged for the records that *can* be stored: they land in
+    one transaction, and a quarantined one touches nothing.
     """
     sync.register(OWNER, "dev-a")
     good = ch("journal", "ok", at(T0), {"v": 1})
     bad = ch("journal", "bad", format_hlc(now_ms() + MAX_DRIFT_MS + 60_000, 0, "dev-a"))
-    with pytest.raises(SyncError):
-        sync.push(OWNER, "dev-a", [good, bad])
-    assert sync.snapshot(OWNER) == {}, "part of a refused batch was applied"
-    assert sync.head(OWNER) == 0, "a refused batch burned a sequence number"
+
+    result = sync.push(OWNER, "dev-a", [good, bad])
+    assert result.accepted == ["journal/ok"]
+    assert [q.record_id for q in result.quarantined] == ["bad"]
+    assert sync.snapshot(OWNER) == {"journal": {"ok": {"v": 1}}}
+
+    # And the device is not stuck: the next push lands normally.
+    again = sync.push(OWNER, "dev-a", [ch("journal", "two", at(T0, 1), {"v": 2})])
+    assert again.accepted == ["journal/two"]
+    assert again.quarantined == []
 
 
-def test_an_oversized_body_is_refused(sync: Sync) -> None:
+def test_every_pushed_change_comes_back_in_exactly_one_list(sync: Sync) -> None:
+    """The invariant that replaced all-or-nothing.
+
+    A client can only clear its dirty set if the response accounts for every
+    change it sent. Three outcomes — stored, lost to a better clock, unstorable
+    — and a change in none of them is a change the client retries forever while
+    believing it is making progress.
+    """
+    sync.register(OWNER, "dev-a")
+    sync.push(OWNER, "dev-a", [ch("journal", "loser", at(T0, 5), {"v": "incumbent"})])
+
+    batch = [
+        ch("journal", "stored", at(T0, 9), {"v": 1}),
+        ch("journal", "loser", at(T0, 1), {"v": "stale"}),  # older clock, loses
+        ch("journal", "huge", at(T0, 9), {"blob": "x" * (300 * 1024)}),
+        ch("journal", "future", format_hlc(now_ms() + MAX_DRIFT_MS + 60_000, 0, "dev-a")),
+    ]
+    result = sync.push(OWNER, "dev-a", batch)
+
+    reported = (
+        {a.split("/", 1)[1] for a in result.accepted}
+        | {r.record_id for r in result.rejected}
+        | {q.record_id for q in result.quarantined}
+    )
+    assert reported == {ch_.record_id for ch_ in batch}
+    counts = (len(result.accepted), len(result.rejected), len(result.quarantined))
+    assert counts == (1, 1, 2), f"accepted/rejected/quarantined was {counts}"
+
+
+def test_an_oversized_body_is_quarantined(sync: Sync) -> None:
     sync.register(OWNER, "dev-a")
     huge = {"blob": "x" * (300 * 1024)}
-    with pytest.raises(SyncError, match="exceeds"):
-        sync.push(OWNER, "dev-a", [ch("journal", "x", at(T0), huge)])
+    result = sync.push(OWNER, "dev-a", [ch("journal", "x", at(T0), huge)])
+    assert [q.record_id for q in result.quarantined] == ["x"]
+    assert "over the" in result.quarantined[0].reason
+    assert sync.snapshot(OWNER) == {}
 
 
 def test_an_oversized_batch_is_refused(sync: Sync) -> None:

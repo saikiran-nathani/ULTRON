@@ -15,6 +15,8 @@ from fastapi.testclient import TestClient
 from src.trainwatch import auth as auth_mod
 from src.trainwatch.auth import Auth
 from src.trainwatch.config import Config
+from urllib.parse import quote, unquote
+
 from src.trainwatch.hlc import format_hlc
 from src.trainwatch.server.app import create_app
 from src.trainwatch.server.auth_api import CSRF_COOKIE, CSRF_HEADER
@@ -178,21 +180,118 @@ def test_a_conflict_returns_the_winner_over_http(client: TestClient) -> None:
     assert body["rejected"][0]["winner"]["body"] == {"v": "winner"}
 
 
-def test_a_malformed_change_is_422_not_400(client: TestClient) -> None:
+def test_an_unidentifiable_change_is_422(client: TestClient) -> None:
     """Unprocessable, not unparseable — and distinguishable from a rejection.
 
-    A rejected write is a normal 200 with a `rejected` list. A malformed one is
-    a client bug. Collapsing the two would make the client unable to tell
-    "retry with the winner" from "this will never work".
+    A rejected write is a normal 200 with a `rejected` list. A change that does
+    not even say which record it is about is a client bug: there is nothing to
+    report per-record, so the request is refused outright. Collapsing the two
+    would make the client unable to tell "retry with the winner" from "this
+    will never work".
+    """
+    csrf = _login(client)
+    for broken in (
+        {"id": "a", "hlc": "nonsense"},  # no collection
+        {"collection": "journal", "hlc": "nonsense"},  # no id
+        {"collection": "journal", "id": "   ", "hlc": "nonsense"},  # blank id
+        "not an object",
+    ):
+        resp = client.post("/api/sync?device=dev-a", json={"changes": [broken]}, headers=csrf)
+        assert resp.status_code == 422, f"{broken!r} was not refused: {resp.text}"
+
+
+def test_a_bad_change_the_server_can_name_is_quarantined_not_a_422(client: TestClient) -> None:
+    """The wedge, over HTTP.
+
+    A 422 for the batch left the offending record in the client's dirty set, so
+    every later push failed identically and the device stopped syncing for good.
+    Naming the record instead lets the client drop it and carry on.
     """
     csrf = _login(client)
     resp = client.post(
         "/api/sync?device=dev-a",
-        json={"changes": [{"collection": "journal", "id": "a", "hlc": "nonsense", "body": {}}]},
+        json={
+            "changes": [
+                {"collection": "journal", "id": "a", "hlc": "nonsense", "body": {}},
+                {"collection": "journal", "id": "b", "hlc": format_hlc(T0, 1, "dev-a"), "body": {"v": 1}},
+            ]
+        },
         headers=csrf,
     )
-    assert resp.status_code == 422
-    assert "hlc" in resp.text.lower()
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["accepted"] == ["journal/b"]
+    assert [(q["collection"], q["id"]) for q in body["quarantined"]] == [("journal", "a")]
+    assert "hlc" in body["quarantined"][0]["reason"].lower()
+    # The reason is rendered in a UI, so it must not repeat the identity that
+    # the fields beside it already carry.
+    assert not body["quarantined"][0]["reason"].startswith("journal/a")
+
+
+def test_quarantined_is_always_present(client: TestClient) -> None:
+    """A key a client has to check for existence is a key it will forget."""
+    csrf = _login(client)
+    resp = client.post("/api/sync?device=dev-a", json={"changes": []}, headers=csrf)
+    assert resp.json()["quarantined"] == []
+
+
+def test_a_long_nested_key_survives_the_round_trip(client: TestClient) -> None:
+    """Stage 3b's keys against the server's length caps.
+
+    A nested record's key is `encodeURIComponent(parent):encodeURIComponent(
+    child)`, and the roadmap seed derives ids from content. The longest key in
+    a real default blob measures exactly 128 characters — which is what the id
+    cap used to be. One more word in a phase title and that record could never
+    be pushed, and the failure would have been a 422 that wedged the device.
+    """
+    csrf = _login(client)
+    parent = "seed%3A0001%3Aphase%3Aship-the-flagship-start-the-baseline"
+    child = "seed%3A0002%3Atask%3Aflagship-design-build-an-agentic-feature-into-ne"
+    key = f"{parent}:{child}"
+    assert len(key) == 128, f"the fixture no longer matches the measured worst case ({len(key)})"
+
+    resp = client.post(
+        "/api/sync?device=dev-a",
+        json={
+            "changes": [
+                {"collection": "roadmap.phases.tasks", "id": key, "hlc": format_hlc(T0, 1, "dev-a"), "body": {"done": True}}
+            ]
+        },
+        headers=csrf,
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["quarantined"] == []
+    assert resp.json()["accepted"] == [f"roadmap.phases.tasks/{key}"]
+
+    # And the conflict archive can be asked about it — a 128-cap on the route
+    # would 422 here for exactly the records most likely to need it.
+    #
+    # The id travels as a QUERY parameter, because a path segment cannot carry
+    # it. The key contains percent-escapes — that is what makes the separator
+    # unambiguous — and this stack decodes the path before routing, so `%3A`
+    # arrives as `:` no matter how many times the client escapes it. The server
+    # would look up an id that exists nowhere and answer 200 with an empty
+    # version list, which reads as "no conflict history" rather than as a bug.
+    hist = client.get(
+        "/api/sync/history", params={"collection": "roadmap.phases.tasks", "id": key}
+    )
+    assert hist.status_code == 200, hist.text
+    assert hist.json()["id"] == key, "the id did not survive the round trip"
+    assert [v["hlc"] for v in hist.json()["versions"]] == [format_hlc(T0, 1, "dev-a")]
+
+    # Two ways to get this wrong, pinned so the distinction stays visible.
+    #
+    # Interpolating the key straight into the query string loses it: `%3A` is
+    # itself an escape, so it decodes to `:`. That is a client bug with a
+    # client fix — encode the value, which `params=` does.
+    unencoded = client.get(f"/api/sync/history?collection=x&id={key}")
+    assert unencoded.json()["id"] != key, "the key survived without being encoded"
+
+    # A path segment has no such fix: this stack decodes the path an extra time
+    # before routing, so even a correctly double-encoded key arrives mangled.
+    # That is why the id is a query parameter and not the path it used to be.
+    assert unquote(quote(key, safe="")) == key, "one decode of an encoded key is exact"
+    assert unquote(unquote(quote(key, safe=""))) != key, "two decodes are not"
 
 
 def test_an_empty_push_is_a_valid_pull(client: TestClient) -> None:
@@ -294,7 +393,9 @@ def test_history_returns_winners_and_losers(client: TestClient) -> None:
         json={"changes": [change("x", 2, "laptop", {"v": "loser"})]},
         headers=csrf,
     )
-    versions = client.get("/api/sync/history/journal/x").json()["versions"]
+    versions = client.get(
+        "/api/sync/history", params={"collection": "journal", "id": "x"}
+    ).json()["versions"]
     by_outcome = {v["outcome"]: v["body"] for v in versions}
     assert by_outcome["accepted"] == {"v": "winner"}
     assert by_outcome["rejected"] == {"v": "loser"}, "the losing version was not recoverable"
@@ -304,4 +405,7 @@ def test_state_and_history_need_an_identity_too(client: TestClient) -> None:
     # Reads are guarded as well; otherwise the device list of an enrolled
     # instance would be readable by anything on the tailnet.
     assert client.get("/api/sync/state").status_code == 401
-    assert client.get("/api/sync/history/journal/x").status_code == 401
+    assert (
+        client.get("/api/sync/history", params={"collection": "journal", "id": "x"}).status_code
+        == 401
+    )

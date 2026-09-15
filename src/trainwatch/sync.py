@@ -78,7 +78,26 @@ MAX_BODY_BYTES = 256 * 1024
 MAX_BATCH = 2000
 
 # Collections and ids come from a client and land in a primary key.
-_MAX_NAME = 128
+# A device's display name and platform. Truncated rather than refused: a
+# cosmetic label is not worth failing a sync over.
+_MAX_LABEL = 128
+
+# A collection name is written by us, in the registry. 40 characters is the
+# longest today ("academics.studyPlanner.pomodoroSettings").
+_MAX_COLLECTION = 128
+
+# A record id is written by the *data*, and Stage 3b made it much longer than
+# it was. A nested key is `encodeURIComponent(parentId):encodeURIComponent(
+# childId)`, and the roadmap seed derives ids from content, so the longest key
+# in a real default blob measures **exactly 128 characters** — which is what
+# this limit used to be. One more word in a phase title and that record could
+# never be pushed at all.
+#
+# The bound is knowable rather than guessed: `seedId` caps its slug at 48
+# characters, so one id is at most ~70 encoded, and a nested key is two of
+# those plus a separator. 512 leaves room for a scheme that has not been
+# invented yet while still refusing an id that could only be abuse.
+_MAX_RECORD_ID = 512
 
 
 class SyncError(ValueError):
@@ -100,7 +119,7 @@ class Change:
         if not isinstance(raw, dict):
             raise SyncError("each change must be an object")
         collection = _name(raw.get("collection"), "collection")
-        record_id = _name(raw.get("id"), "id")
+        record_id = _name(raw.get("id"), "id", _MAX_RECORD_ID)
         hlc = raw.get("hlc")
         if not isinstance(hlc, str):
             # Explicit, rather than letting `parse` deal with it: a JSON body
@@ -123,6 +142,43 @@ class Change:
             raise SyncError(f"{collection}/{record_id}: a live change needs a body")
         return Change(collection, record_id, hlc, deleted, body)
 
+    @staticmethod
+    def parse_batch(raws: Any) -> tuple[list[Change], list[Quarantine]]:
+        """Parse a batch, quarantining the changes that cannot be stored.
+
+        The split is by *who can fix it*. A change whose collection and id are
+        readable has a data problem: the client can name the record, tell the
+        user, and stop offering it — so it comes back in `quarantined` and the
+        rest of the batch lands. A change that is not even an object, or has no
+        usable collection or id, is a client bug: nothing identifies the
+        record, so there is nothing per-record to report and the request is
+        refused outright.
+        """
+        if not isinstance(raws, list):
+            raise SyncError("changes must be a list")
+        good: list[Change] = []
+        bad: list[Quarantine] = []
+        for raw in raws:
+            try:
+                good.append(Change.from_json(raw))
+            except SyncError as exc:
+                if not isinstance(raw, dict):
+                    raise
+                collection = raw.get("collection")
+                record_id = raw.get("id")
+                if not isinstance(collection, str) or not isinstance(record_id, str):
+                    raise
+                if not collection.strip() or not record_id.strip():
+                    raise
+                # `from_json` prefixes its messages with `collection/id`, which
+                # the Quarantine fields already carry — strip it rather than
+                # render "journal/a: journal/a: ..." in the UI.
+                reason = str(exc).removeprefix(f"{collection}/{record_id}: ")
+                # Truncated, because an over-long id is one of the things that
+                # lands here and the reason becomes a log line and a UI string.
+                bad.append(Quarantine(collection[:_MAX_LABEL], record_id[:_MAX_LABEL], reason))
+        return good, bad
+
 
 @dataclass(frozen=True)
 class Rejection:
@@ -137,10 +193,32 @@ class Rejection:
     winner: dict[str, Any]
 
 
+@dataclass(frozen=True)
+class Quarantine:
+    """A pushed change the server cannot store, and why.
+
+    The alternative was a 422 for the whole batch, and it was a trap. A client
+    keeps a change in its dirty set until the server acknowledges it, so one
+    unstorable record — an id past the length cap, a body past the size cap, a
+    clock past the drift ceiling — failed every subsequent push as well. Sync
+    stopped, permanently, for that device, and the only symptom was a 422 that
+    no screen displayed.
+
+    So a per-record problem comes back per-record. The client learns which
+    record is unstorable, stops offering it, and keeps syncing everything else.
+    Losing one record visibly beats losing every future record silently.
+    """
+
+    collection: str
+    record_id: str
+    reason: str
+
+
 @dataclass
 class PushResult:
     accepted: list[str] = field(default_factory=list)
     rejected: list[Rejection] = field(default_factory=list)
+    quarantined: list[Quarantine] = field(default_factory=list)
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -148,6 +226,13 @@ class PushResult:
             "rejected": [
                 {"collection": r.collection, "id": r.record_id, "winner": r.winner}
                 for r in self.rejected
+            ],
+            # Always present, even when empty. A client that has to check
+            # whether the key exists will forget to, and the whole point of
+            # this list is that it cannot be missed.
+            "quarantined": [
+                {"collection": q.collection, "id": q.record_id, "reason": q.reason}
+                for q in self.quarantined
             ],
         }
 
@@ -174,11 +259,11 @@ class Device:
         }
 
 
-def _name(value: Any, what: str) -> str:
+def _name(value: Any, what: str, limit: int = _MAX_COLLECTION) -> str:
     if not isinstance(value, str) or not value.strip():
         raise SyncError(f"{what} must be a non-empty string")
-    if len(value) > _MAX_NAME:
-        raise SyncError(f"{what} is longer than {_MAX_NAME} characters")
+    if len(value) > limit:
+        raise SyncError(f"{what} is longer than {limit} characters")
     if "\x00" in value:
         raise SyncError(f"{what} contains a null byte")
     return value
@@ -226,7 +311,7 @@ class Sync:
                    name       = CASE WHEN excluded.name != '' THEN excluded.name ELSE name END,
                    platform   = CASE WHEN excluded.platform != '' THEN excluded.platform ELSE platform END,
                    retired_at = NULL""",
-            (device_id, owner_id, name[:_MAX_NAME], platform[:_MAX_NAME], now, now),
+            (device_id, owner_id, name[:_MAX_LABEL], platform[:_MAX_LABEL], now, now),
         )
         self._db.commit()
         got = self.device(owner_id, device_id)
@@ -301,24 +386,43 @@ class Sync:
         if len(changes) > MAX_BATCH:
             raise SyncError(f"batch of {len(changes)} exceeds the {MAX_BATCH} limit")
 
-        # Reject implausible clocks before touching anything. See MAX_DRIFT_MS:
-        # one device with a wildly wrong clock would otherwise win every future
-        # conflict, permanently, with no recovery but a hand-edited database.
+        # Screen implausible clocks and oversized bodies before touching
+        # anything. See MAX_DRIFT_MS: one device with a wildly wrong clock
+        # would otherwise win every future conflict, permanently, with no
+        # recovery but a hand-edited database.
+        #
+        # Quarantined, not raised. These are per-record problems, and failing
+        # the batch on one of them stopped the device from ever syncing again —
+        # its next push contained the same record and failed the same way.
         wall = now_ms()
+        storable: list[Change] = []
+        quarantined: list[Quarantine] = []
         for ch in changes:
             millis, _, _ = parse(ch.hlc)
             if millis > wall + MAX_DRIFT_MS:
-                raise SyncError(
-                    f"{ch.collection}/{ch.record_id}: clock is "
-                    f"{(millis - wall) / 1000:.0f}s ahead of the server, past the "
-                    f"{MAX_DRIFT_MS / 1000:.0f}s ceiling"
+                quarantined.append(
+                    Quarantine(
+                        ch.collection,
+                        ch.record_id,
+                        f"clock is {(millis - wall) / 1000:.0f}s ahead of the server, past the "
+                        f"{MAX_DRIFT_MS / 1000:.0f}s ceiling",
+                    )
                 )
+                continue
             if ch.body is not None:
                 encoded = json.dumps(ch.body, separators=(",", ":"))
                 if len(encoded.encode()) > MAX_BODY_BYTES:
-                    raise SyncError(
-                        f"{ch.collection}/{ch.record_id}: body exceeds {MAX_BODY_BYTES} bytes"
+                    quarantined.append(
+                        Quarantine(
+                            ch.collection,
+                            ch.record_id,
+                            f"body is {len(encoded.encode())} bytes, over the "
+                            f"{MAX_BODY_BYTES} limit",
+                        )
                     )
+                    continue
+            storable.append(ch)
+        changes = storable
 
         # A single client may legitimately send two versions of one record in
         # one batch (edited twice while offline). Resolve locally first so the
@@ -330,7 +434,7 @@ class Sync:
             if prev is None or wins(ch.hlc, prev.hlc):
                 latest[key] = ch
 
-        result = PushResult()
+        result = PushResult(quarantined=quarantined)
         now = time.time()
 
         try:

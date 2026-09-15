@@ -112,10 +112,15 @@ def build_sync_router(sync_for: Callable[[], Sync]) -> APIRouter:
         s = sync_for()
 
         try:
-            parsed = [Change.from_json(c) for c in (changes or [])]
+            parsed, unstorable = Change.parse_batch(changes or [])
         except SyncError as exc:
             # 422, not 400: the request was understood and is unprocessable.
             # Distinguishable from a rejected write, which is a normal 200.
+            #
+            # Only reached when nothing identifies the offending record, which
+            # means a client bug rather than a data problem. Anything nameable
+            # comes back in `quarantined` with a 200, so one unstorable record
+            # cannot stop the device from syncing the rest — see Quarantine.
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
         s.register(owner, device, name=name, platform=platform)
@@ -124,6 +129,22 @@ def build_sync_router(sync_for: Callable[[], Sync]) -> APIRouter:
             result = s.sync(owner, device, changes=parsed, since_seq=since, limit=limit)
         except SyncError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+        if unstorable:
+            result["quarantined"] = [
+                *result.get("quarantined", []),
+                *({"collection": q.collection, "id": q.record_id, "reason": q.reason} for q in unstorable),
+            ]
+
+        if result["quarantined"]:
+            # Louder than a rejection, because a rejection is the protocol
+            # working and this is a record that will never sync until someone
+            # changes the data.
+            log.warning(
+                "sync: device=%s quarantined=%s",
+                device,
+                [f"{q['collection']}/{q['id']}: {q['reason']}" for q in result["quarantined"]],
+            )
 
         if result["rejected"]:
             # Worth a log line: a rejection is normal, but a burst of them is
@@ -163,11 +184,21 @@ def build_sync_router(sync_for: Callable[[], Sync]) -> APIRouter:
         changed = sync_for().retire(owner, device_id)
         return {"retired": changed, "device": device_id}
 
-    @router.get("/history/{collection}/{record_id}")
+    @router.get("/history")
     async def history(
         request: Request,
-        collection: Annotated[str, Path(min_length=1, max_length=128)],
-        record_id: Annotated[str, Path(min_length=1, max_length=128)],
+        # Query parameters, not path segments, and that is not a style choice.
+        #
+        # A record id is opaque data now: Stage 3b keys a nested record as
+        # `encodeURIComponent(parentId):encodeURIComponent(childId)`, so the id
+        # genuinely contains percent-escapes. A path segment cannot carry them
+        # — this stack decodes the path before routing, so `%3A` arrives as
+        # `:` however many times the client escapes it, and the server then
+        # looks up an id that exists nowhere. The reply is a 200 with an empty
+        # version list, which reads as "this record has no conflict history"
+        # rather than as a bug. A query parameter round-trips exactly.
+        collection: Annotated[str, Query(min_length=1, max_length=128)],
+        record_id: Annotated[str, Query(min_length=1, max_length=512, alias="id")],
         limit: Annotated[int, Query(ge=1, le=200)] = 50,
     ) -> dict[str, Any]:
         """Every version of one record, winners and losers.
